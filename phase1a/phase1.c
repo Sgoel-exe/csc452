@@ -31,6 +31,8 @@ struct Process{
     Process * children;
     Process * parent;
     Process * nextSibling;
+    int childRet;
+    int childStatus;
 };
 //-----Global Vars---------//
 Process ProcList[MAXPROC];
@@ -57,7 +59,8 @@ void phase1_init(void){
         ProcList[i].children = NULL;
         ProcList[i].parent = NULL;
         ProcList[i].nextSibling = NULL;
-
+        ProcList[i].childRet = -1;
+        ProcList[i].childStatus = EMPTY;
     }
 
     // CurrentPID = 1;
@@ -74,21 +77,20 @@ void phase1_init(void){
     // ProcList[0].children = NULL;
     // ProcList[0].parent = NULL;
     // ProcList[0].nextSibling = NULL;
-
     CurrentPID = ProcList[0].pid;
     
-    USLOSS_ContextInit(&(ProcList[0].state), &(ProcList[0].stack), ProcList[0].stackSize, NULL, NULL);
+    //USLOSS_ContextInit(&(ProcList[0].state), &(ProcList[0].stack), ProcList[0].stackSize, NULL, NULL);
     //Call Fork1 to start sentinell
     int res = fork1("sentinel", sentinel, NULL, USLOSS_MIN_STACK, 6);
     if(res < 0){
         USLOSS_Console("Fork1(): Unable to fork sentinel, Stopping Proces.");
         USLOSS_Halt(1);
     }
-    CurrentPID = res;
+    //CurrentPID = res;
     //FOrk to testCase_main
     res = fork1("testcase_main", testcase_main, NULL, USLOSS_MIN_STACK, 6);
     //context switch to test case main
-    USLOSS_ContextSwitch(&(ProcList[0].state), &(ProcList[res].state));
+    USLOSS_ContextSwitch(&(ProcList[0].state), &(ProcList[res-1].state));
     CurrentPID = res;
     return;
     }
@@ -102,7 +104,6 @@ void startProcesses(void){
 
 int fork1(char *name, int(*startFunc)(char *), char *arg, int stacksize, int priority){
     int procIndex = -1;
-
     //Check for errors
     if(strlen(name) >= (MAXNAME-1)){
         USLOSS_Console("Fork1(): Name of the process is too long, Stopping Proces.");
@@ -120,21 +121,32 @@ int fork1(char *name, int(*startFunc)(char *), char *arg, int stacksize, int pri
         }
     }
     //Initialize PCB
-    nextPID = procIndex + 2;
+    nextPID = procIndex + 1;
     Process * newProc = &ProcList[procIndex];
-    newProc->pid = procIndex+1;
+    newProc->pid = procIndex + 1;
     newProc->Status = EMPTY;
     newProc->priority = priority;
+    *(newProc->name) = (char *)malloc(MAXNAME);
     strcpy(newProc->name, name);
+    *(newProc->startArgs) = (char *)malloc(MAXARG);
+    
+    if(arg != NULL){
+        strcpy(newProc->startArgs, arg);
+    }
+
     newProc->startFunc = startFunc;
-    strcpy(newProc->startArgs, arg);
     newProc->stack = malloc(stacksize);
     newProc->stackSize = stacksize;
     newProc->returnVal = -1;
+    newProc->children = NULL;
+    newProc->parent = &(ProcList[CurrentPID-1]);
+    newProc->nextSibling = NULL;
+    newProc->childRet = -1;
+    newProc->childStatus = EMPTY;
 
+    newProc->parent->childStatus = READY;
     //Initialize usloss context
     USLOSS_ContextInit(&(newProc->state), newProc->stack, newProc->stackSize, NULL, newProc->startFunc);
-
     return newProc->pid;
 }
 
@@ -147,7 +159,25 @@ int sentinel(char *arg){
 }
 
 int join(int *status){
-
+    //Check if any children are quit
+    Process * current = &ProcList[CurrentPID-1];
+    Process * child = current->children;
+    if(child == NULL){
+        return -2;
+    }
+    while(child != NULL){
+        if(child->Status == QUIT){
+            *status = child->returnVal;
+            int retPid = child->pid;
+            freeProc(*child);
+            return retPid;
+        }
+        child = child->nextSibling;
+    }
+    //If no children are quit, block the process
+    current->Status = JOIN;
+    //USLOSS_DeviceInput(USLOSS_CLOCK_DEV, 0, status);
+    return ;
 }
 
 void freeProc(Process p){
@@ -166,12 +196,22 @@ void freeProc(Process p){
 }
 
 void quit(int status, int switchToPID){
-    
+    if(CurrentPID == 1){
+        USLOSS_Console("Quit(): Cannot quit the init process, Stopping Proces.");
+        USLOSS_Halt(1);
+    }
+    ProcList[CurrentPID-1].Status = QUIT;
+    ProcList[CurrentPID-1].parent->childRet = status;
+    ProcList[CurrentPID-1].parent->childStatus = QUIT;
+    //Context swith to switchToPID
+    USLOSS_ContextSwitch(&(ProcList[CurrentPID-1].state), &(ProcList[switchToPID-1].state));
+
 }
 
 void TEMP_switchTo(int newpid){
 prevProc = CurrentPID;
-USLOSS_ContextSwitch(&(ProcList[CurrentPID-1].state), &(ProcList[newpid-1].state));
+CurrentPID = newpid;
+USLOSS_ContextSwitch(&(ProcList[prevProc-1].state), &(ProcList[CurrentPID-1].state));
 }
 
 /* 
