@@ -43,6 +43,10 @@ int prevProc =- 1;
 void trampoline(void);
 
 void phase1_init(void){
+    phase2_start_service_processes();
+    phase3_start_service_processes();
+    phase4_start_service_processes();
+    phase5_start_service_processes();
     //memset ProcList
     memset(ProcList, 0, sizeof(ProcList));
     //initialize PCB for init
