@@ -40,6 +40,7 @@ int CurrentPID;
 int nextPID = 1;
 int sentinel(char *);
 int prevProc =- 1;
+void trampoline(void);
 
 void phase1_init(void){
     //memset ProcList
@@ -69,16 +70,19 @@ void phase1_init(void){
     ProcList[0].Status = RUNNING;
     ProcList[0].priority = 6;
     strcpy(ProcList[0].name, "init");
-    // ProcList[0].startFunc = NULL;
-    // ProcList[0].startArgs[0] = '\0';
+    //Assign halter to startfunc
+    ProcList[0].startFunc = startProcesses;
+    ProcList[0].startArgs[0] = '\0';
     ProcList[0].stack = malloc(USLOSS_MIN_STACK);
     ProcList[0].stackSize = USLOSS_MIN_STACK;
-    // ProcList[0].returnVal = -1;
-    // ProcList[0].children = NULL;
-    // ProcList[0].parent = NULL;
-    // ProcList[0].nextSibling = NULL;
+    ProcList[0].returnVal = -1;
+    ProcList[0].children = NULL;
+    ProcList[0].parent = NULL;
+    ProcList[0].nextSibling = NULL;
+    //Initialize usloss context
+    USLOSS_ContextInit(&(ProcList[0].state), ProcList[0].stack, ProcList[0].stackSize, NULL, startProcesses);
     CurrentPID = ProcList[0].pid;
-    
+   // USLOSS_Console("phase1_init(): Current PID before forking : %d\n", CurrentPID);
     //USLOSS_ContextInit(&(ProcList[0].state), &(ProcList[0].stack), ProcList[0].stackSize, NULL, NULL);
     //Call Fork1 to start sentinell
     int res = fork1("sentinel", sentinel, NULL, USLOSS_MIN_STACK, 6);
@@ -86,20 +90,27 @@ void phase1_init(void){
         USLOSS_Console("Fork1(): Unable to fork sentinel, Stopping Proces.");
         USLOSS_Halt(1);
     }
+    //USLOSS_Console("phase1_init(): Current PID before forking to sentinel : %d\n", CurrentPID);
     //CurrentPID = res;
     //FOrk to testCase_main
     res = fork1("testcase_main", testcase_main, NULL, USLOSS_MIN_STACK, 6);
     //context switch to test case main
-    USLOSS_ContextSwitch(&(ProcList[0].state), &(ProcList[res-1].state));
-    CurrentPID = res;
-    return;
+    // CurrentPID = res;
+    //USLOSS_ContextSwitch(&(ProcList[0].state), &(ProcList[res-1].state));
+    TEMP_switchTo(res);
     }
 
+// void Halter(void){
+//     USLOSS_Console("Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.");
+//     USLOSS_Halt(0);
+// }
 
 void startProcesses(void){
     //Context swith to init
-    USLOSS_ContextSwitch(NULL, &(ProcList[0].state));
+    USLOSS_Console("startProcesses(): Current PID before forking : %d\n", CurrentPID);
     CurrentPID = ProcList[0].pid;
+    USLOSS_ContextSwitch(NULL, &(ProcList[0].state));
+    USLOSS_Halt(0);
 }
 
 int fork1(char *name, int(*startFunc)(char *), char *arg, int stacksize, int priority){
@@ -144,11 +155,21 @@ int fork1(char *name, int(*startFunc)(char *), char *arg, int stacksize, int pri
     newProc->childRet = -1;
     newProc->childStatus = EMPTY;
 
+    ProcList[CurrentPID-1].children = newProc;
+
     newProc->parent->childStatus = READY;
     //Initialize usloss context
-    USLOSS_ContextInit(&(newProc->state), newProc->stack, newProc->stackSize, NULL, newProc->startFunc);
+    USLOSS_ContextInit(&(newProc->state), newProc->stack, newProc->stackSize, NULL, trampoline);
     return newProc->pid;
 }
+
+//Create a trampoline function that takes in a function pointer, and arguments , and returns them
+void trampoline(){
+    //USLOSS_Console("Trampoline(): Process %s with PID %d is starting\n", ProcList[CurrentPID-1].name, CurrentPID);
+    ProcList[CurrentPID-1].startFunc(ProcList[CurrentPID-1].startArgs);
+    //quit(0, ProcList[CurrentPID-1].parent->pid);
+}
+
 
 //Create sentinel process
 int sentinel(char *arg){
@@ -160,7 +181,10 @@ int sentinel(char *arg){
 
 int join(int *status){
     //Check if any children are quit
-    Process * current = &ProcList[CurrentPID-1];
+    //Print current proccess and pid
+    //USLOSS_Console("Join(): Process %s with PID %d is joining\n", ProcList[CurrentPID-1].name, CurrentPID);
+    Process * current = &ProcList[CurrentPID-1]; // current = parent
+    // Process parrent = current->parent;
     Process * child = current->children;
     if(child == NULL){
         return -2;
@@ -169,6 +193,7 @@ int join(int *status){
         if(child->Status == QUIT){
             *status = child->returnVal;
             int retPid = child->pid;
+
             freeProc(*child);
             return retPid;
         }
@@ -200,17 +225,25 @@ void quit(int status, int switchToPID){
         USLOSS_Console("Quit(): Cannot quit the init process, Stopping Proces.");
         USLOSS_Halt(1);
     }
-    ProcList[CurrentPID-1].Status = QUIT;
-    ProcList[CurrentPID-1].parent->childRet = status;
-    ProcList[CurrentPID-1].parent->childStatus = QUIT;
+    //Print out process name and current pid
+   // USLOSS_Console("Quit(): Process %s with PID %d is quitting with status %d\n", ProcList[CurrentPID-1].name, CurrentPID, status);
+    int prevPID = CurrentPID;
+    ProcList[prevPID-1].Status = QUIT;
+    ProcList[prevPID-1].parent->childRet = status;
+    ProcList[prevPID-1].returnVal = status;
+    ProcList[prevPID-1].parent->childStatus = QUIT;
     //Context swith to switchToPID
-    USLOSS_ContextSwitch(&(ProcList[CurrentPID-1].state), &(ProcList[switchToPID-1].state));
+    CurrentPID = switchToPID;
+    USLOSS_ContextSwitch(&(ProcList[prevPID-1].state), &(ProcList[CurrentPID-1].state));
 
 }
 
 void TEMP_switchTo(int newpid){
 prevProc = CurrentPID;
 CurrentPID = newpid;
+//Print from and to process names and pids
+//USLOSS_Console("phase1_init(): Previous PID for proccess %s : %d\n", ProcList[prevProc-1].name,prevProc);
+//USLOSS_Console("phase1_init(): Current PID for proccess %s : %d\n", ProcList[CurrentPID-1].name,CurrentPID);
 USLOSS_ContextSwitch(&(ProcList[prevProc-1].state), &(ProcList[CurrentPID-1].state));
 }
 
