@@ -38,9 +38,13 @@ struct Process{
 Process ProcList[MAXPROC];
 int CurrentPID;
 int nextPID = 1;
-int sentinel(char *);
 int prevProc =- 1;
+
+//-----Function Prototypes---------//
 void trampoline(void);
+int sentinel(char *);
+int initFunc(char *);
+int testMain_trampoline(char *);
 
 void phase1_init(void){
     phase2_start_service_processes();
@@ -75,8 +79,8 @@ void phase1_init(void){
     ProcList[0].priority = 6;
     strcpy(ProcList[0].name, "init");
     //Assign halter to startfunc
-    ProcList[0].startFunc = startProcesses;
-    ProcList[0].startArgs[0] = '\0';
+    ProcList[0].startFunc = initFunc;
+    ProcList[0].startArgs[0] = 'FUCKTHISCLASS';
     ProcList[0].stack = malloc(USLOSS_MIN_STACK);
     ProcList[0].stackSize = USLOSS_MIN_STACK;
     ProcList[0].returnVal = -1;
@@ -84,7 +88,7 @@ void phase1_init(void){
     ProcList[0].parent = NULL;
     ProcList[0].nextSibling = NULL;
     //Initialize usloss context
-    USLOSS_ContextInit(&(ProcList[0].state), ProcList[0].stack, ProcList[0].stackSize, NULL, startProcesses);
+    USLOSS_ContextInit(&(ProcList[0].state), ProcList[0].stack, ProcList[0].stackSize, NULL, trampoline);
     CurrentPID = ProcList[0].pid;
    // USLOSS_Console("phase1_init(): Current PID before forking : %d\n", CurrentPID);
     //USLOSS_ContextInit(&(ProcList[0].state), &(ProcList[0].stack), ProcList[0].stackSize, NULL, NULL);
@@ -97,13 +101,18 @@ void phase1_init(void){
     //USLOSS_Console("phase1_init(): Current PID before forking to sentinel : %d\n", CurrentPID);
     //CurrentPID = res;
     //FOrk to testCase_main
-    res = fork1("testcase_main", testcase_main, NULL, USLOSS_MIN_STACK, 6);
+    res = fork1("testcase_main", testMain_trampoline, NULL, USLOSS_MIN_STACK, 6);
     //context switch to test case main
     // CurrentPID = res;
     //USLOSS_ContextSwitch(&(ProcList[0].state), &(ProcList[res-1].state));
+    USLOSS_Console("Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using fork1() to create it.\n");
     TEMP_switchTo(res);
     }
 
+int initFunc(char* IDK){
+    USLOSS_Console("Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.");
+    USLOSS_Halt(0);
+}
 // void Halter(void){
 //     USLOSS_Console("Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.");
 //     USLOSS_Halt(0);
@@ -113,7 +122,7 @@ void startProcesses(void){
     //Context swith to init
     USLOSS_Console("startProcesses(): Current PID before forking : %d\n", CurrentPID);
     CurrentPID = ProcList[0].pid;
-    USLOSS_ContextSwitch(NULL, &(ProcList[0].state));
+    //USLOSS_ContextSwitch(NULL, &(ProcList[0].state));
     USLOSS_Halt(0);
 }
 
@@ -170,10 +179,16 @@ int fork1(char *name, int(*startFunc)(char *), char *arg, int stacksize, int pri
 //Create a trampoline function that takes in a function pointer, and arguments , and returns them
 void trampoline(){
     //USLOSS_Console("Trampoline(): Process %s with PID %d is starting\n", ProcList[CurrentPID-1].name, CurrentPID);
-    ProcList[CurrentPID-1].startFunc(ProcList[CurrentPID-1].startArgs);
+    int res = ProcList[CurrentPID-1].startFunc(ProcList[CurrentPID-1].startArgs);
     //quit(0, ProcList[CurrentPID-1].parent->pid);
 }
 
+int testMain_trampoline(char *DontNeedThis){
+    int res = testcase_main();
+    USLOSS_Console("Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.\n");
+    USLOSS_Halt(0);
+    return 0;
+}
 
 //Create sentinel process
 int sentinel(char *arg){
