@@ -38,16 +38,18 @@ struct Process
     char *stack;
     int stackSize;
     int returnVal;
-    Process *children;
     Process *parent;
+    Process *children;
     Process *nextSibling;
     int childRet;
     int childStatus;
 };
 
+
 //-----Global Vars---------//
 Process ProcList[MAXPROC];
-int CurrentPID;
+// int CurrentPID;
+Process *CurrentProc;
 int nextPID = 1;
 int prevProc = -1;
 
@@ -92,32 +94,37 @@ void phase1_init(void)
 
     // CurrentPID = 1;
     // Initialize PCB for init
-    ProcList[0].pid = 1;
-    ProcList[0].Status = RUNNING;
-    ProcList[0].priority = 6;
-    strcpy(ProcList[0].name, "init");
+    int index = nextPID ;
+    ProcList[index].pid = 1;
+    ProcList[index].Status = READY;
+    ProcList[index].priority = 6;
+    strcpy(ProcList[index].name, "init");
     // Assign halter to startfunc
-    ProcList[0].startFunc = initFunc;
-    ProcList[0].startArgs[0] = 'FUCKTHISCLASS';
-    ProcList[0].stack = malloc(USLOSS_MIN_STACK);
-    ProcList[0].stackSize = USLOSS_MIN_STACK;
-    ProcList[0].returnVal = -1;
-    ProcList[0].children = NULL;
-    ProcList[0].parent = NULL;
-    ProcList[0].nextSibling = NULL;
+    ProcList[index].startFunc = initFunc;
+    ProcList[index].startArgs[0] = 'FUCKTHISCLASS';
+    ProcList[index].stack = malloc(USLOSS_MIN_STACK);
+    ProcList[index].stackSize = USLOSS_MIN_STACK;
+    ProcList[index].returnVal = -1;
+    ProcList[index].children = NULL;
+    ProcList[index].parent = NULL;
+    ProcList[index].nextSibling = NULL;
     // Initialize usloss context
-    USLOSS_ContextInit(&(ProcList[0].state), ProcList[0].stack, ProcList[0].stackSize, NULL, trampoline);
-    CurrentPID = ProcList[0].pid;
+    USLOSS_ContextInit(&(ProcList[index].state), ProcList[index].stack, ProcList[index].stackSize, NULL, trampoline);
+    // CurrentPID = ProcList[0].pid;
+    CurrentProc = &(ProcList[index]);
     // Call Fork1 to start sentinell
-    int res = fork1("sentinel", sentinel, NULL, USLOSS_MIN_STACK, 6);
+    ++nextPID;
+    int res = fork1("sentinel", sentinel, NULL, USLOSS_MIN_STACK, 7);
+    USLOSS_Console("init(): next pid %d\n", nextPID);
     if (res < 0)
     {
         USLOSS_Console("Fork1(): Unable to fork sentinel, Stopping Proces.");
         USLOSS_Halt(1);
     }
 
-    res = fork1("testcase_main", testMain_trampoline, NULL, USLOSS_MIN_STACK, 6);
+    res = fork1("testcase_main", testMain_trampoline, NULL, USLOSS_MIN_STACK, 3);
     USLOSS_Console("Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using fork1() to create it.\n");
+    USLOSS_Console("init(): next pid %d\n", nextPID);
     TEMP_switchTo(res);
 }
 
@@ -130,70 +137,129 @@ int initFunc(char *IDK)
 void startProcesses(void)
 {
     // Context switch to init
-    USLOSS_Console("startProcesses(): Current PID before forking : %d\n", CurrentPID);
-    CurrentPID = ProcList[0].pid;
+    USLOSS_Console("startProcesses(): How da heck we got here\n");
+    CurrentProc = &(ProcList[0]);
+    // CurrentPID = ProcList[0].pid;
     USLOSS_Halt(0);
+}
+
+int emptySlotAvailable() 
+{
+    int slot = -1;
+    int i;
+    int startPid = nextPID;
+
+    // find the next available slot in the table between startPid and MAXPROC
+    for (i = (startPid % MAXPROC); i < MAXPROC; i++)
+    {
+        if (ProcList[i].Status == EMPTY)
+        {
+                slot = i;
+                // nextPID++;
+                break;
+        }
+        else
+        {
+                nextPID++;
+        }
+    }
+
+        // if there was no free slot in the previous loop
+        
+    if (slot == -1)
+    {
+            // try to find a free slot between 0 and startPid
+        for (i = 0; i < (startPid % MAXPROC); i++)
+        {
+            if (ProcList[i].Status == EMPTY)
+            {
+                slot = i;
+                // nextPID++;
+                break;
+            }
+            else
+            {
+                nextPID++;
+            }
+        }
+    }
+    
+    return slot;
+}
+
+int getNextPID()
+{
+    return nextPID;
+}
+
+void ProcPrinter(int pid){
+    //Print Details about the proccess ath given pid
+    USLOSS_Console("PID: %d\t", ProcList[pid % MAXPROC].pid);
+    USLOSS_Console("Status: %d\t", ProcList[pid % MAXPROC].Status);
+    USLOSS_Console("Priority: %d\t", ProcList[pid % MAXPROC].priority);
+    USLOSS_Console("Name: %s\n", ProcList[pid % MAXPROC].name);
 }
 
 int fork1(char *name, int (*startFunc)(char *), char *arg, int stacksize, int priority)
 {
-    int procIndex = -1;
     // Check for errors
-    if (strlen(name) >= (MAXNAME - 1))
-    {
-        USLOSS_Console("Fork1(): Name of the process is too long, Stopping Proces.");
-        USLOSS_Halt(1);
+    if(stacksize < USLOSS_MIN_STACK){
+        return -2;
     }
+    
 
-    // Find next empty PCB
-    for (int i = 0; i < MAXPROC; i++)
+    if (priority<1 || startFunc==NULL || name==NULL || strlen(name)>MAXNAME)
     {
-        if (ProcList[(nextPID + i) % MAXPROC].Status == EMPTY)
-        {
-            procIndex = nextPID + i;
-            break;
-        }
-        if (i == MAXPROC - 1)
-        {
-            return -1;
-        }
+        return -1;
     }
-    // Initialize PCB
-    nextPID = procIndex + 1;
-    Process *newProc = &ProcList[procIndex];
-    newProc->pid = procIndex + 1;
-    newProc->Status = EMPTY;
-    newProc->priority = priority;
-    *(newProc->name) = (char *)malloc(MAXNAME);
-    strcpy(newProc->name, name);
-    *(newProc->startArgs) = (char *)malloc(MAXARG);
+    
 
+    int procIndex = emptySlotAvailable();
+    if(procIndex == -1){
+        return -1;
+    }
+    ProcList[procIndex].pid = nextPID;
+    ProcList[procIndex].Status = READY;
+    ProcList[procIndex].priority = priority;
+
+    *(ProcList[procIndex].name) = (char *)malloc(MAXNAME);
+    strcpy(ProcList[procIndex].name, name);
+    
+    *(ProcList[procIndex].startArgs) = (char *)malloc(MAXARG);
     if (arg != NULL)
     {
-        strcpy(newProc->startArgs, arg);
+        strcpy(ProcList[procIndex].startArgs, arg);
+    }
+    ProcList[procIndex].startFunc = startFunc;
+    ProcList[procIndex].stack = malloc(stacksize);
+    ProcList[procIndex].stackSize = stacksize;
+    ProcList[procIndex].returnVal = -1;
+    ProcList[procIndex].children = NULL;
+    ProcList[procIndex].parent = CurrentProc;
+    ProcList[procIndex].nextSibling = NULL;
+    ProcList[procIndex].childRet = -1;
+    ProcList[procIndex].childStatus = EMPTY;
+    ProcList[procIndex].parent->childStatus = READY;
+    USLOSS_ContextInit(&(ProcList[procIndex].state), ProcList[procIndex].stack, ProcList[procIndex].stackSize, NULL, trampoline);
+
+    // int currentIndex = CurrentPID - 1;
+    if(CurrentProc->children == NULL){
+        CurrentProc->children = &(ProcList[procIndex]);
+    }
+    else{
+        //Add to head
+        Process *temp = CurrentProc->children;
+        CurrentProc->children = &(ProcList[procIndex]);
+        ProcList[procIndex].nextSibling = temp;
     }
 
-    newProc->startFunc = startFunc;
-    newProc->stack = malloc(stacksize);
-    newProc->stackSize = stacksize;
-    newProc->returnVal = -1;
-    newProc->children = NULL;
-    newProc->parent = &(ProcList[CurrentPID - 1]);
-    newProc->nextSibling = NULL;
-    newProc->childRet = -1;
-    newProc->childStatus = EMPTY;
-
-    ProcList[CurrentPID - 1].children = newProc;
-
-    newProc->parent->childStatus = READY;
-    // Initialize usloss context
-    USLOSS_ContextInit(&(newProc->state), newProc->stack, newProc->stackSize, NULL, trampoline);
-    return newProc->pid;
+    return ProcList[procIndex].pid;
 }
 
 void trampoline()
 {
-    int res = ProcList[CurrentPID - 1].startFunc(ProcList[CurrentPID - 1].startArgs);
+    int psr_retval = USLOSS_PsrSet(USLOSS_PSR_CURRENT_MODE | USLOSS_PSR_CURRENT_INT);
+    int res = CurrentProc->startFunc(CurrentProc->startArgs);
 }
 
 int testMain_trampoline(char *DontNeedThis)
@@ -216,77 +282,133 @@ int sentinel(char *arg)
 
 int join(int *status)
 {
-    Process *current = &ProcList[CurrentPID - 1]; // current = parent
-    Process *child = current->children;
-    if (child == NULL)
+    Process *current = CurrentProc; // current = parent
+    Process *curr = current->children;
+    if (curr == NULL)
     {
+        //USLOSS_Console("Join(): No Children to report for process id %d.\n", CurrentPID);
         return -2;
     }
-    while (child != NULL)
-    {
-        if (child->Status == QUIT)
-        {
-            *status = child->returnVal;
-            int retPid = child->pid;
 
-            freeProc(*child);
+    //Check Head is quit
+    if (curr->Status == QUIT)
+    {
+        //USLOSS_Console("Join(): Child %d has quit.\n", child->pid);
+        *status = curr->returnVal;
+        int retPid = curr->pid;
+        current->children = curr->nextSibling;
+        freeProc(curr);
+        return retPid;
+    }
+
+    Process *prev = curr;
+    curr = curr->nextSibling;
+    while (curr != NULL)
+    {
+        if (curr->Status == QUIT)
+        {
+            //USLOSS_Console("Join(): Child %d has quit.\n", child->pid);
+            *status = curr->returnVal;
+            int retPid = curr->pid;
+            prev->nextSibling = curr->nextSibling;
+            freeProc(curr);
             return retPid;
         }
-        child = child->nextSibling;
+        prev = curr;
+        curr = curr->nextSibling;
     }
     // If no children are quit, block the process
-    current->Status = JOIN;
-    return;
+    // current->Status = JOIN;
+    USLOSS_Console("Join(): Why did we reach here?. \n");
+    USLOSS_Halt(1);
+    return -2;
 }
 
-void freeProc(Process p)
+void freeProc(Process *p)
 {
-    p.pid = -1;
-    p.Status = EMPTY;
-    p.priority = -1;
-    p.name[0] = '\0';
-    p.startFunc = NULL;
-    p.startArgs[0] = '\0';
-    p.stack = NULL;
-    p.stackSize = -1;
-    p.returnVal = -1;
-    p.children = NULL;
-    p.parent = NULL;
-    p.nextSibling = NULL;
+    p->pid = -1;
+    p->Status = EMPTY;
+    p->priority = -1;
+    p->name[0] = '\0';
+    p->startFunc = NULL;
+    p->startArgs[0] = '\0';
+    free(p->stack);
+    p->stackSize = -1;
+    p->returnVal = -1;
+    p->children = NULL;
+    p->parent = NULL;
+    p->nextSibling = NULL;
 }
 
 void quit(int status, int switchToPID)
 {
-    if (CurrentPID == 1)
+    if (CurrentProc->pid == 1)
     {
         USLOSS_Console("Quit(): Cannot quit the init process, Stopping Proces.");
         USLOSS_Halt(1);
     }
+
+    if(CurrentProc->children != NULL){
+        USLOSS_Console("Quit(): Cannot quit a process %d with children, Stopping Proces.", CurrentProc->pid);
+        USLOSS_Halt(1);
+    }
     // Print out process name and current pid
-    int prevPID = CurrentPID;
-    ProcList[prevPID - 1].Status = QUIT;
-    ProcList[prevPID - 1].parent->childRet = status;
-    ProcList[prevPID - 1].returnVal = status;
-    ProcList[prevPID - 1].parent->childStatus = QUIT;
+    // ProcList[prevPID - 1].Status = QUIT;
+    // ProcList[prevPID - 1].parent->childRet = status;
+    // ProcList[prevPID - 1].returnVal = status;
+    // ProcList[prevPID - 1].parent->childStatus = QUIT;
+    
+    //Change Currents status
+    CurrentProc->Status = QUIT;
+    CurrentProc->returnVal = status;
+    //Change currents parents child status
+    CurrentProc->parent->childStatus = QUIT;
+    CurrentProc->parent->childRet = status;
     // Context swith to switchToPID
-    CurrentPID = switchToPID;
-    USLOSS_ContextSwitch(&(ProcList[prevPID - 1].state), &(ProcList[CurrentPID - 1].state));
+    TEMP_switchTo(switchToPID);
 }
 
 void TEMP_switchTo(int newpid)
 {
-    prevProc = CurrentPID;
-    CurrentPID = newpid;
-    USLOSS_ContextSwitch(&(ProcList[prevProc - 1].state), &(ProcList[CurrentPID - 1].state));
+    // prevProc = CurrentPID;
+    // ProcList[prevProc - 1].Status = READY;
+    // CurrentPID = newpid;
+    // ProcList[CurrentPID - 1].Status = RUNNING;
+    //CurrentProc->Status = READY;
+    int indexFrom = (CurrentProc->pid % MAXPROC);
+    int indexTo = newpid % MAXPROC;
+    CurrentProc = &(ProcList[indexTo]);
+    CurrentProc->Status = RUNNING;
+    // dumpProcesses();
+    //USLOSS_Console("TEMP_switchTo(): Switching from %d to %d\n", indexFrom, indexTo);
+    USLOSS_ContextSwitch(&(ProcList[indexFrom].state), &(ProcList[indexTo].state));
 }
 
 int getpid(void)
 {
-    return CurrentPID;
+    return CurrentProc->pid;
 }
 
-void dumpProcesses(void)
-{
+void dumpProcesses(void){
+    USLOSS_Console(" PID  PPID  NAME              PRIORITY  STATE\n");
+    for (int i = 0; i < MAXPROC; i++)
+    {
+        if (ProcList[i].Status != EMPTY)
+        {
+            USLOSS_Console("%4d  %4d  %-17s %-10d", ProcList[i].pid, ProcList[i].parent==NULL?0:ProcList[i].parent->pid, ProcList[i].name, ProcList[i].priority);
+            
+            if(ProcList[i].Status == QUIT){
+                USLOSS_Console("Terminated(%d)\n", ProcList[i].returnVal);
+            }
+            else if(ProcList[i].Status == RUNNING){
+                USLOSS_Console("Running\n");
+            }
+            else{
+                USLOSS_Console("Runnable\n");
+            }
+        }
+    }
+
 }
 
 /**
