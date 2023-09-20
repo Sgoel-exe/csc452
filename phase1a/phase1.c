@@ -19,6 +19,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
+#include <time.h>
 
 //-----Definitions---------//
 #define EMPTY 0
@@ -53,6 +55,8 @@ struct Process
     Process *ReadyChild;      // next child process that is ready to run
     int childRet;             // return value of the child
     int childStatus;          // status of the child
+    long int startTime;
+    long int totalTime;
 };
 
 //-----Global Vars---------//
@@ -72,6 +76,9 @@ Process *CurrentProc;
 int nextPID = 1;
 int prevProc = -1;
 
+//DEBUG var
+int debug1 = 0;
+
 //-----Function Prototypes---------//
 void trampoline(void);
 int sentinel(char *);
@@ -79,6 +86,7 @@ int initFunc(char *);
 int testMain_trampoline(char *);
 void userMode(char *);
 void freeProc(Process *);
+void dispatcher(void);
 
 //-----Function Implementations---------//
 
@@ -111,6 +119,8 @@ void phase1_init(void)
         ProcList[i].ReadyChild = NULL;
         ProcList[i].childRet = -1;
         ProcList[i].childStatus = EMPTY;
+        ProcList[i].startTime = -1;
+        ProcList[i].totalTime = 0;
     }
 
     ReadyProcessHead = NULL; // Initialize the ready process Linked-list
@@ -138,8 +148,9 @@ void phase1_init(void)
 
     // Call Fork1 to start testcase_main
     res = fork1("testcase_main", testMain_trampoline, NULL, USLOSS_MIN_STACK, 3);
-    USLOSS_Console("Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using fork1() to create it.\n");
-    TEMP_switchTo(res);
+    //USLOSS_Console("Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using fork1() to create it.\n");
+    //TEMP_switchTo(res);
+    dispatcher();
 }
 
 /**
@@ -159,7 +170,18 @@ void startProcesses(void)
 {
 
     CurrentProc = &(ProcList[0]);
+    dispatcher();
     USLOSS_Halt(0);
+}
+
+void EnableInterupts(){
+    int result = USLOSS_PsrSet(USLOSS_PsrGet() | USLOSS_PSR_CURRENT_INT);
+    assert(result == USLOSS_DEV_OK);
+}
+
+void DisableInterupts(){
+    int result = USLOSS_PsrSet(USLOSS_PsrGet() & ~USLOSS_PSR_CURRENT_INT);
+    assert(result == USLOSS_DEV_OK);
 }
 
 /**
@@ -245,7 +267,7 @@ void readyListAdd(Process *entry)
             }
             curr = curr->ReadyChild;
         }
-        if (curr->ReadyChild != NULL) // This is wierd MAybe we switch this to == NULL
+        if (curr->ReadyChild == NULL) // This is wierd MAybe we switch this to == NULL
         {
             curr->ReadyChild = entry;
         }
@@ -258,28 +280,31 @@ void readyListAdd(Process *entry)
     }
 }
 
-
-void readyListDel(Process* entry){
-    Process* curr = ReadyProcessHead;
+void readyListDel(Process *entry)
+{
+    Process *curr = ReadyProcessHead;
     entry->Status = CURRENT;
-    while(curr->ReadyChild != NULL && curr->ReadyChild != entry){
+    while (curr->ReadyChild != NULL && curr->ReadyChild != entry)
+    {
         curr = curr->ReadyChild;
     }
-    if(curr->ReadyChild == NULL){
-        if(curr->pid == entry->pid){
+    if (curr->ReadyChild == NULL)
+    {
+        if (curr->pid == entry->pid)
+        {
             curr = NULL;
         }
-        else{
+        else
+        {
             USLOSS_Console("ERROR: readyListDel(): Process not found in ready list.\n");
-            //USLOSS_Halt(1);
+            // USLOSS_Halt(1);
         }
     }
-    else{
+    else
+    {
         curr->ReadyChild = curr->ReadyChild->ReadyChild;
     }
-
 }
-
 
 /**
  * @brief Creates a new process and adds it to the process table. The process is added to the parent's children list.
@@ -333,9 +358,11 @@ int fork1(char *name, int (*startFunc)(char *), char *arg, int stacksize, int pr
     ProcList[procIndex].children = NULL;
     ProcList[procIndex].parent = CurrentProc;
     ProcList[procIndex].nextSibling = NULL;
-    ProcList[procIndex].childRet = -1;
     ProcList[procIndex].childStatus = EMPTY;
     ProcList[procIndex].parent->childStatus = READY;
+    ProcList[procIndex].parent->childRet = -1;
+    ProcList[procIndex].startTime = 0;
+    ProcList[procIndex].totalTime = 0;
     USLOSS_ContextInit(&(ProcList[procIndex].state), ProcList[procIndex].stack, ProcList[procIndex].stackSize, NULL, trampoline);
 
     // Add to parent's children list
@@ -351,6 +378,9 @@ int fork1(char *name, int (*startFunc)(char *), char *arg, int stacksize, int pr
         ProcList[procIndex].nextSibling = temp;
     }
     ++nextPID;
+
+    readyListAdd(&(ProcList[procIndex]));
+    //dispatcher();
     return ProcList[procIndex].pid;
 }
 
@@ -439,8 +469,10 @@ int join(int *status)
         curr = curr->nextSibling;
     }
     // If no children are quit, block the process
-    USLOSS_Console("Join(): We should not be here. \n");
-    USLOSS_Halt(1);
+    CurrentProc->Status = JOIN;
+    dispatcher();
+    //USLOSS_Console("Join(): We should not be here. \n");
+    //USLOSS_Halt(1);
     return -2;
 }
 
@@ -466,6 +498,8 @@ void freeProc(Process *p)
     p->ReadyChild = NULL;
     p->childRet = -1;
     p->childStatus = EMPTY;
+    p->startTime = -1;
+    p->totalTime = 0;
 }
 
 /**
@@ -479,6 +513,7 @@ void quit(int status)
 {
     userMode("quit");
 
+    DisableInterupts();
     // Error checking
     if (CurrentProc->pid == 1)
     {
@@ -500,6 +535,7 @@ void quit(int status)
     CurrentProc->parent->childRet = status;
     // Context swith to switchToPID
     // TEMP_switchTo(switchToPID);
+    dispatcher();
 }
 
 /**
@@ -507,18 +543,18 @@ void quit(int status)
  *
  * @param newpid This is the PID of the process that the current process will switch to.
  */
-void TEMP_switchTo(int newpid)
-{
-    int indexFrom = (CurrentProc->pid % MAXPROC);
-    int indexTo = newpid % MAXPROC;
-    CurrentProc = &(ProcList[indexTo]);
-    CurrentProc->Status = RUNNING;
-    if (CurrentProc->parent != NULL)
-    {
-        CurrentProc->parent->Status = READY;
-    }
-    USLOSS_ContextSwitch(&(ProcList[indexFrom].state), &(ProcList[indexTo].state));
-}
+// void TEMP_switchTo(int newpid)
+// {
+//     int indexFrom = (CurrentProc->pid % MAXPROC);
+//     int indexTo = newpid % MAXPROC;
+//     CurrentProc = &(ProcList[indexTo]);
+//     CurrentProc->Status = RUNNING;
+//     if (CurrentProc->parent != NULL)
+//     {
+//         CurrentProc->parent->Status = READY;
+//     }
+//     USLOSS_ContextSwitch(&(ProcList[indexFrom].state), &(ProcList[indexTo].state));
+// }
 
 /**
  * @brief This function returns the PID of the current process.
@@ -568,6 +604,9 @@ void userMode(char *name)
         USLOSS_Console("ERROR: Someone attempted to call %s while in user mode!\n", name);
         USLOSS_Halt(1);
     }
+    else{
+        EnableInterupts();
+    }
 }
 
 // to be implemented in 1b
@@ -577,6 +616,7 @@ void zap(int pid)
 
 int isZapped(void)
 {
+    return 0;
 }
 void blockMe(int newStatus)
 {
@@ -593,23 +633,81 @@ int unblockProc(int pid)
     return -2;
 }
 
-int readCurStartTime(void)
+//Russ code
+static void clockHandler(int dev, void *arg)
 {
+    if (debug1)
+    {
+        USLOSS_Console("clockHandler(): PSR = %d\n", USLOSS_PsrGet());
+        USLOSS_Console("clockHandler(): currentTime = %d\n", currentTime());
+    }
+    /* make sure to call this first, before timeSlice(), since we want to do
+     * the Phase 2 related work even if process(es) are chewing up lots of
+     * CPU.
+     */
+    phase2_clockHandler();
+    // call the dispatcher if the time slice has expired
+    timeSlice();
+    /* when we return from the handler, USLOSS automatically re-enables
+     * interrupts and disables kernel mode (unless we were previously in
+     * kernel code). Or I think so. I haven’t double-checked yet. TODO
+     */
 }
 
+int readCurStartTime(void) //Call this just before contex switch in dispatcher
+{
+    // Return current CPU time in microseconds
+    CurrentProc->startTime = currentTime();
+    return CurrentProc->startTime; 
+}
+
+//Russ Code
 int currentTime(void)
 {
+    int retval = 0;
+    int result = USLOSS_DeviceInput(USLOSS_CLOCK_DEV, 0, &retval);
+    assert(result == USLOSS_DEV_OK);
+    return retval;
 }
 
-int readtime(void)
+int readtime(void) // calculate the total time before Context Switiching becuase u fool you have the start time and the the current time befero switching
 {
+    return CurrentProc->totalTime;
 }
 
 void timeSlice(void)
 {
+    if(currentTime() - CurrentProc->startTime >= 80){
+        dispatcher();
+    }
 }
 
 void dispatcher(void)
 {
     // EnableInterrupts();
+    userMode("dispatcher");
+
+    if(CurrentProc != NULL && CurrentProc->Status != QUIT && CurrentProc->Status != CURRENT && CurrentProc->Status != JOIN){
+        readyListAdd(CurrentProc);
+    }
+    Process* nextProc;
+    if(ReadyProcessHead->ReadyChild != NULL){
+        nextProc = ReadyProcessHead->ReadyChild;
+        readyListDel(nextProc);
+    }
+    else{
+        nextProc = ReadyProcessHead;
+        //readyListDel(nextProc);
+    }
+    if(CurrentProc == NULL){
+        CurrentProc = nextProc;
+        CurrentProc->Status = RUNNING;
+        USLOSS_ContextSwitch(NULL, &(CurrentProc->state));
+    }
+    else{
+        Process* temp = CurrentProc;
+        CurrentProc = nextProc;
+        USLOSS_ContextSwitch(&(temp->state), &(nextProc->state));
+    }
+
 }
