@@ -52,7 +52,6 @@ struct Process
     Process *parent;          // parent process
     Process *children;        // children processes
     Process *nextSibling;     // next sibling process (Linked list)
-    Process *ReadyChild;      // next child process that is ready to run
     int childRet;             // return value of the child
     int childStatus;          // status of the child
     long int startTime;
@@ -69,9 +68,6 @@ struct Process
  * fork1(), join(), quit().
  */
 Process ProcList[MAXPROC];
-
-Process *ReadyProcessHead;
-
 Process *CurrentProc;
 int nextPID = 1;
 int prevProc = -1;
@@ -86,10 +82,10 @@ int initFunc(char *);
 int testMain_trampoline(char *);
 void userMode(char *);
 void freeProc(Process *);
-void dispatcher(void);
-
+void dispatcher(int);
+void clockHandler(int, void *);
+void timeSlice(void);
 //-----Function Implementations---------//
-
 /**
  * @brief Initializes the process table and forks the sentinel process. It also forks the testcasemain process.
  */
@@ -99,7 +95,7 @@ void phase1_init(void)
     phase3_start_service_processes();
     phase4_start_service_processes();
     phase5_start_service_processes();
-
+    USLOSS_IntVec[USLOSS_CLOCK_INT] = clockHandler;
     memset(ProcList, 0, sizeof(ProcList));
     // Initialize the proccess list
     for (int i = 0; i < MAXPROC; i++)
@@ -116,15 +112,11 @@ void phase1_init(void)
         ProcList[i].children = NULL;
         ProcList[i].parent = NULL;
         ProcList[i].nextSibling = NULL;
-        ProcList[i].ReadyChild = NULL;
         ProcList[i].childRet = -1;
         ProcList[i].childStatus = EMPTY;
         ProcList[i].startTime = -1;
         ProcList[i].totalTime = 0;
     }
-
-    ReadyProcessHead = NULL; // Initialize the ready process Linked-list
-
     // Initialize PCB for init
     int index = nextPID;
     ProcList[index].pid = 1;
@@ -150,7 +142,7 @@ void phase1_init(void)
     res = fork1("testcase_main", testMain_trampoline, NULL, USLOSS_MIN_STACK, 3);
     //USLOSS_Console("Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using fork1() to create it.\n");
     //TEMP_switchTo(res);
-    dispatcher();
+    dispatcher(0);
 }
 
 /**
@@ -168,9 +160,8 @@ int initFunc(char *IDK)
  */
 void startProcesses(void)
 {
-
     CurrentProc = &(ProcList[0]);
-    dispatcher();
+    dispatcher(0);
     USLOSS_Halt(0);
 }
 
@@ -249,62 +240,6 @@ void ProcPrinter(int pid)
     USLOSS_Console("Name: %s\n", ProcList[pid % MAXPROC].name);
 }
 
-void readyListAdd(Process *entry)
-{
-    if (ReadyProcessHead == NULL)
-    {
-        ReadyProcessHead = entry;
-    }
-    else
-    {
-        // Add sorted by priority
-        Process *curr = ReadyProcessHead;
-        while (curr->ReadyChild != NULL)
-        {
-            if (curr->ReadyChild->priority <= entry->priority)
-            {
-                break;
-            }
-            curr = curr->ReadyChild;
-        }
-        if (curr->ReadyChild == NULL) // This is wierd MAybe we switch this to == NULL
-        {
-            curr->ReadyChild = entry;
-        }
-        else
-        {
-            Process *temp = curr->ReadyChild;
-            curr->ReadyChild = entry;
-            curr->ReadyChild->ReadyChild = temp;
-        }
-    }
-}
-
-void readyListDel(Process *entry)
-{
-    Process *curr = ReadyProcessHead;
-    entry->Status = CURRENT;
-    while (curr->ReadyChild != NULL && curr->ReadyChild != entry)
-    {
-        curr = curr->ReadyChild;
-    }
-    if (curr->ReadyChild == NULL)
-    {
-        if (curr->pid == entry->pid)
-        {
-            curr = NULL;
-        }
-        else
-        {
-            USLOSS_Console("ERROR: readyListDel(): Process not found in ready list.\n");
-            // USLOSS_Halt(1);
-        }
-    }
-    else
-    {
-        curr->ReadyChild = curr->ReadyChild->ReadyChild;
-    }
-}
 
 /**
  * @brief Creates a new process and adds it to the process table. The process is added to the parent's children list.
@@ -322,6 +257,7 @@ int fork1(char *name, int (*startFunc)(char *), char *arg, int stacksize, int pr
 {
     userMode("fork1");
     // Check for errors
+    DisableInterupts();
     if (stacksize < USLOSS_MIN_STACK)
     {
         return -2;
@@ -378,9 +314,11 @@ int fork1(char *name, int (*startFunc)(char *), char *arg, int stacksize, int pr
         ProcList[procIndex].nextSibling = temp;
     }
     ++nextPID;
-
-    readyListAdd(&(ProcList[procIndex]));
-    //dispatcher();
+    if(strcmp(name, "sentinel") == 0){
+        return ProcList[procIndex].pid;
+    }
+    EnableInterupts();
+    dispatcher(3);
     return ProcList[procIndex].pid;
 }
 
@@ -404,7 +342,7 @@ void trampoline()
 int testMain_trampoline(char *PlaceHolder)
 {
     testcase_main();
-    USLOSS_Console("Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.\n");
+    //USLOSS_Console("Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.\n");
     USLOSS_Halt(0);
     return 0;
 }
@@ -437,6 +375,8 @@ int join(int *status)
 {
     Process *current = CurrentProc; // current = parent
     Process *curr = current->children;
+    int retPid = -2;
+    // CurrentProc->Status = BLOCKED;
     if (curr == NULL)
     {
         return -2;
@@ -446,12 +386,21 @@ int join(int *status)
     if (curr->Status == QUIT)
     {
         *status = curr->returnVal;
-        int retPid = curr->pid;
+        retPid = curr->pid;
         current->children = curr->nextSibling;
+        CurrentProc->Status = JOIN;
         freeProc(curr);
+        dispatcher(4);
         return retPid;
     }
 
+    // if(curr->Status == READY){
+    //     CurrentProc->Status = BLOCKED;
+    //     dispatcher(2);
+    //     *status = curr->returnVal;
+    //     int retPid = curr->pid;
+    //     return retPid;
+    // }
     // checking the rest of the children
     Process *prev = curr;
     curr = curr->nextSibling;
@@ -460,20 +409,25 @@ int join(int *status)
         if (curr->Status == QUIT)
         {
             *status = curr->returnVal;
-            int retPid = curr->pid;
+            retPid = curr->pid;
             prev->nextSibling = curr->nextSibling;
+            CurrentProc->Status = JOIN;
             freeProc(curr);
+            dispatcher(4);
             return retPid;
         }
         prev = curr;
         curr = curr->nextSibling;
     }
     // If no children are quit, block the process
-    CurrentProc->Status = JOIN;
-    dispatcher();
+    CurrentProc->Status = BLOCKED;
+    
+    dispatcher(2);
+    retPid = prev->pid;
+    *status = prev->returnVal;
     //USLOSS_Console("Join(): We should not be here. \n");
     //USLOSS_Halt(1);
-    return -2;
+    return retPid;
 }
 
 /**
@@ -495,7 +449,6 @@ void freeProc(Process *p)
     p->children = NULL;
     p->parent = NULL;
     p->nextSibling = NULL;
-    p->ReadyChild = NULL;
     p->childRet = -1;
     p->childStatus = EMPTY;
     p->startTime = -1;
@@ -530,12 +483,15 @@ void quit(int status)
     // Change Currents status
     CurrentProc->Status = QUIT;
     CurrentProc->returnVal = status;
+    // CurrentProc->priority = -1;
     // Change currents parents child status
     CurrentProc->parent->childStatus = QUIT;
     CurrentProc->parent->childRet = status;
     // Context swith to switchToPID
     // TEMP_switchTo(switchToPID);
-    dispatcher();
+    EnableInterupts();
+    //USLOSS_Console("Quit(): Process %d is quitting with status %d.\n", CurrentProc->pid, status);
+    dispatcher(1);
 }
 
 /**
@@ -543,18 +499,18 @@ void quit(int status)
  *
  * @param newpid This is the PID of the process that the current process will switch to.
  */
-// void TEMP_switchTo(int newpid)
-// {
-//     int indexFrom = (CurrentProc->pid % MAXPROC);
-//     int indexTo = newpid % MAXPROC;
-//     CurrentProc = &(ProcList[indexTo]);
-//     CurrentProc->Status = RUNNING;
-//     if (CurrentProc->parent != NULL)
-//     {
-//         CurrentProc->parent->Status = READY;
-//     }
-//     USLOSS_ContextSwitch(&(ProcList[indexFrom].state), &(ProcList[indexTo].state));
-// }
+void switchTo(int newpid)
+{
+    int indexFrom = (CurrentProc->pid % MAXPROC);
+    int indexTo = newpid % MAXPROC;
+    CurrentProc = &(ProcList[indexTo]);
+    CurrentProc->Status = RUNNING;
+    if (CurrentProc->parent != NULL)
+    {
+        CurrentProc->parent->Status = READY;
+    }
+    USLOSS_ContextSwitch(&(ProcList[indexFrom].state), &(ProcList[indexTo].state));
+}
 
 /**
  * @brief This function returns the PID of the current process.
@@ -634,7 +590,7 @@ int unblockProc(int pid)
 }
 
 //Russ code
-static void clockHandler(int dev, void *arg)
+void clockHandler(int dev, void *arg)
 {
     if (debug1)
     {
@@ -678,36 +634,63 @@ int readtime(void) // calculate the total time before Context Switiching becuase
 void timeSlice(void)
 {
     if(currentTime() - CurrentProc->startTime >= 80){
-        dispatcher();
+        dispatcher(2);
     }
 }
 
-void dispatcher(void)
+void dispatcher(int dev)
 {
     // EnableInterrupts();
     userMode("dispatcher");
-
-    if(CurrentProc != NULL && CurrentProc->Status != QUIT && CurrentProc->Status != CURRENT && CurrentProc->Status != JOIN){
-        readyListAdd(CurrentProc);
+    DisableInterupts();
+    int min_priorty = 6;
+    int index = -1;
+    // if(dev == 2){
+    //      USLOSS_Console("dispatcher(): I was called by JOIN\n");
+    // }
+    // else if(dev == 2){
+    //     USLOSS_Console("dispatcher(): I was called by timeSlice\n");
+    // }
+    // else if(dev == 3){
+    //     USLOSS_Console("dispatcher(): I was called by fork1\n");
+    // }
+    for(int i = 3; i < MAXPROC; i++){
+        if(ProcList[i].Status == READY || ProcList[i].Status == JOIN ||ProcList[i].Status == RUNNING){
+            //USLOSS_Console("~~i = %d~~", i);
+            if(ProcList[i].priority < min_priorty && ProcList[i].priority != -1){
+                //USLOSS_Console("dispatcher(): Process: %d || Name: %s || Pri: %d\n", ProcList[i].pid, ProcList[i].name, ProcList[i].priority);
+                min_priorty = ProcList[i].priority;
+                index = ProcList[i].pid;
+            }
+        }
     }
-    Process* nextProc;
-    if(ReadyProcessHead->ReadyChild != NULL){
-        nextProc = ReadyProcessHead->ReadyChild;
-        readyListDel(nextProc);
+    //USLOSS_Console("dispatcher(): Switching from %d %d to %d %d\n", CurrentProc->pid, CurrentProc->priority,index, ProcList[index].priority);
+    if(index == -1){
+        return;
     }
+    // if(min_priorty >= CurrentProc->priority){
+    //     return;
+    // }
     else{
-        nextProc = ReadyProcessHead;
-        //readyListDel(nextProc);
-    }
-    if(CurrentProc == NULL){
-        CurrentProc = nextProc;
-        CurrentProc->Status = RUNNING;
-        USLOSS_ContextSwitch(NULL, &(CurrentProc->state));
-    }
-    else{
-        Process* temp = CurrentProc;
-        CurrentProc = nextProc;
-        USLOSS_ContextSwitch(&(temp->state), &(nextProc->state));
+        switchToIndex(index);
     }
 
 }
+
+void switchToIndex(int newpid){
+    //USLOSS_Console("switchTO: Current %d, %s \n", CurrentProc->pid, CurrentProc->name);
+    //USLOSS_Console("TEMP_switchTo(): Switching from %d to %d\n", CurrentProc->pid, newpid);
+    int indexFrom = (CurrentProc->pid % MAXPROC);
+    int indexTo = newpid % MAXPROC;
+    CurrentProc = &(ProcList[indexTo]);
+    //USLOSS_Console("switchTO: Current %d, %s \n", CurrentProc->pid, CurrentProc->name);
+    CurrentProc->Status = RUNNING;
+    // dumpProcesses();
+    if (CurrentProc->parent != NULL)
+    {
+        CurrentProc->parent->Status = READY;
+    }
+    USLOSS_ContextSwitch(&(ProcList[indexFrom].state), &(ProcList[indexTo].state));
+}
+
+
