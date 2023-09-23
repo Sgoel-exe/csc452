@@ -32,6 +32,7 @@
 #define ZAPPED 6
 #define CURRENT 7
 #define ZAPBLOCK 8
+#define SLICED 9
 
 typedef struct Process Process;
 
@@ -390,45 +391,6 @@ int sentinel(char *arg)
  *
  * @return int The PID of the child that quit. If the parent has no children, -2 is returned.
  */
-// int join(int *status){
-//     userMode("join");
-//     DisableInterupts();
-//     //Current Proc is the Parent
-//     //We need to find a quit child and set status and retunr pid, or if we have
-//     //a child that has not quit, we need to block until it quit
-//     if(CurrentProc->children == NULL){
-//         return -2;
-//     }
-//     Process *child = CurrentProc->children;
-//     int pid = -2;
-//     Process *prev = NULL;
-//     while(child != NULL){
-//         if(child->Status == QUIT){
-//             if(prev == NULL){
-//                 CurrentProc->children = child->nextSibling;
-//             }
-//             else{
-//                 prev->nextSibling = child->nextSibling;
-//             }
-
-//             break;
-//         }
-//         prev = child;
-//         child = child->nextSibling;
-//     }
-//     if(child == NULL){
-//             CurrentProc->Status = BLOCKED;
-//             dispatcher(5);
-//             return join(*status);
-//     }
-//     else{
-//         *status = child->returnVal;
-//         pid = child->pid;
-//         freeProc(child);
-//     }
-//     return pid;
-
-// }
 int join(int *status)
 {
     userMode("join");
@@ -457,18 +419,24 @@ int join(int *status)
 
                 break;
             }
+            if(child->Status == READY){
+                CurrentProc->Status = BLOCKED;
+            }
             prev = child;
             child = child->nextSibling;
         }
         if(child == NULL){
             CurrentProc->Status = BLOCKED;
-            // USLOSS_Console("join(): Process %s is blocked waiting for a child to quit.\n", CurrentProc->name);
+            //USLOSS_Console("join(): Process %s is blocked waiting for a child to quit.\n", CurrentProc->name);
             dispatcher(5);
+            CurrentProc->Status = RUNNING;
         }
         else{
         *status = child->returnVal;
         pid = child->pid;
         freeProc(child);
+        CurrentProc->Status = RUNNING;
+        dispatcher(5);
         return pid;
         }
     }
@@ -559,8 +527,8 @@ void quit(int status)
     CurrentProc->returnVal = status;
     // CurrentProc->priority = -1;
     // Change currents parents child status
-    CurrentProc->parent->childStatus = QUIT;
-    CurrentProc->parent->childRet = status;
+    // CurrentProc->parent->childStatus = QUIT;
+    // CurrentProc->parent->childRet = status;
 
     // Context swith to switchToPID
     // TEMP_switchTo(switchToPID);
@@ -626,11 +594,11 @@ void dumpProcesses(void)
                 USLOSS_Console("Blocked(waiting for zap target to quit)\n");
                 break;
             case BLOCKED:
-                USLOSS_Console("Blocked(waiting for JOIN)\n");
+                USLOSS_Console("Blocked(waiting for child to quit)\n");
                 break;
-            case ZAPPED:
-                USLOSS_Console("This Proccess is Zapped\n");
-                break;
+            // case ZAPPED:
+            //     USLOSS_Console("This Proccess is Zapped\n");
+            //     break;
             default:
                 USLOSS_Console("Runnable\n");
                 break;
@@ -663,18 +631,28 @@ void zap(int pid)
     //USLOSS_Console("Zap(): Process %s is zapping process %s.\n", CurrentProc->name, ProcList[pid % MAXPROC].name);
     if (CurrentProc->pid == pid)
     {
-        USLOSS_Console("Error: Process %d tried to zap (Suicide not allowed) itself.\n", CurrentProc->pid);
+        USLOSS_Console("ERROR: Attempt to zap() itself.\n");
         USLOSS_Halt(1);
     }
-    int index = pid % MAXPROC;
-    if (ProcList[index].Status == EMPTY)
-    {
-        USLOSS_Console("Error: Process %d tried to zap a nonexistent process.\n", CurrentProc->pid);
+    if(pid <= 0){
+        USLOSS_Console("ERROR: Attempt to zap() a PID which is <=0.  other_pid = %d\n", pid);
         USLOSS_Halt(1);
     }
     if (pid == 1)
     {
-        USLOSS_Console("Error: Process %d tried to zap init (Stupid).\n", CurrentProc->pid);
+        USLOSS_Console("ERROR: Attempt to zap() init.\n", CurrentProc->pid);
+        USLOSS_Halt(1);
+    }
+    int index = pid % MAXPROC;
+    if (ProcList[index].Status == QUIT)
+    {
+        USLOSS_Console("ERROR: Attempt to zap() a process that is already in the process of dying.\n");
+        USLOSS_Halt(1);
+    }
+    if (ProcList[index].Status == EMPTY || ProcList[index].pid != pid)
+    {
+        USLOSS_Console("ERROR: Attempt to zap() a non-existent process.\n");
+        USLOSS_Halt(1);
     }
 
     ProcList[index].isZapped = 1;
@@ -684,7 +662,7 @@ void zap(int pid)
         i += 1;
     }
     ProcList[index].calledZapped[i] = CurrentProc->pid;
-    ProcList[index].Status = ZAPPED;
+    // ProcList[index].Status = ZAPPED;
 
     CurrentProc->Status = ZAPBLOCK;
     // dumpProcesses();
@@ -762,8 +740,10 @@ int readtime(void) // calculate the total time before Context Switiching becuase
 
 void timeSlice(void)
 {
-    if (currentTime() - CurrentProc->startTime >= 80)
+    //USLOSS_Console("timeSlice(): Process %s ran for %d milliseconds.\n", CurrentProc->name, currentTime() - CurrentProc->startTime);
+    if (currentTime() - CurrentProc->startTime >= 80000)
     {
+        CurrentProc->Status = SLICED;
         dispatcher(2);
     }
 }
@@ -776,12 +756,15 @@ void dispatcher(int dev)
     int min_priorty = 10;
     if (dev == 2)
     {
-        min_priorty = CurrentProc->priority;
+        min_priorty = CurrentProc->priority + 1;
     }
     int index = -1;
     for (int i = 0; i < MAXPROC; i++)
     {
-        // if(i == 1){
+        if(i == 1){
+            continue;
+        }
+        // if(ProcList[i].Status == SLICED){
         //     continue;
         // }
         if (ProcList[i].Status == READY || ProcList[i].Status == JOIN || ProcList[i].Status == RUNNING)
