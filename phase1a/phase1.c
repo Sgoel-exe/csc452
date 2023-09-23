@@ -31,6 +31,7 @@
 #define BLOCKED 5
 #define ZAPPED 6
 #define CURRENT 7
+#define ZAPBLOCK 8
 
 typedef struct Process Process;
 
@@ -56,6 +57,9 @@ struct Process
     int childStatus;          // status of the child
     long int startTime;
     long int totalTime;
+    int isZapped;  // 0 if not zapped, 1 if zapped
+    int calledZapped[MAXPROC]; // Saves PID of processes that called zap on this process
+    int blockReason; // 0 is unblocked, else blocked for reasons
 };
 
 //-----Global Vars---------//
@@ -116,6 +120,11 @@ void phase1_init(void)
         ProcList[i].childStatus = EMPTY;
         ProcList[i].startTime = -1;
         ProcList[i].totalTime = 0;
+        ProcList[i].isZapped = 0;
+        for(int j = 0; j < MAXPROC; j++){
+            ProcList[i].calledZapped[j] = -1;
+        }
+        ProcList[i].blockReason = 0;
     }
     // Initialize PCB for init
     int index = nextPID;
@@ -143,6 +152,7 @@ void phase1_init(void)
     //USLOSS_Console("Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using fork1() to create it.\n");
     //TEMP_switchTo(res);
     dispatcher(0);
+    USLOSS_Console("Phase 1A TEMPORARY HACK: init() returned, simulation will now halt.\n");
 }
 
 /**
@@ -151,6 +161,8 @@ void phase1_init(void)
 int initFunc(char *IDK)
 {
     USLOSS_Console("Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.");
+    while(1){
+    }
     USLOSS_Halt(0);
     return 0;
 }
@@ -329,6 +341,7 @@ void trampoline()
 {
     int res = USLOSS_PsrSet(USLOSS_PSR_CURRENT_MODE | USLOSS_PSR_CURRENT_INT);
     CurrentProc->startFunc(CurrentProc->startArgs);
+    quit(0);
     res += 1;
 }
 
@@ -373,8 +386,8 @@ int sentinel(char *arg)
  */
 int join(int *status)
 {
-    Process *current = CurrentProc; // current = parent
-    Process *curr = current->children;
+    //Process *current = CurrentProc; // current = parent
+    Process *curr = CurrentProc->children;
     int retPid = -2;
     // CurrentProc->Status = BLOCKED;
     if (curr == NULL)
@@ -387,13 +400,20 @@ int join(int *status)
     {
         *status = curr->returnVal;
         retPid = curr->pid;
-        current->children = curr->nextSibling;
+        CurrentProc->children = curr->nextSibling;
         CurrentProc->Status = JOIN;
         freeProc(curr);
         dispatcher(4);
         return retPid;
     }
-
+    // Process *temp = curr;
+    // while(temp != NULL){
+    //     if(temp->Status == READY){
+    //         CurrentProc->Status = BLOCKED;
+    //         break;
+    //     }
+    //     temp = temp->nextSibling;
+    // }
     // if(curr->Status == READY){
     //     CurrentProc->Status = BLOCKED;
     //     dispatcher(2);
@@ -406,6 +426,12 @@ int join(int *status)
     curr = curr->nextSibling;
     while (curr != NULL)
     {
+        // if(curr->Status == EMPTY){
+        //     break;
+        // }
+        // if(prev->Status == READY || curr->Status == READY){
+        //     CurrentProc->Status = BLOCKED;
+        // }
         if (curr->Status == QUIT)
         {
             *status = curr->returnVal;
@@ -421,10 +447,13 @@ int join(int *status)
     }
     // If no children are quit, block the process
     CurrentProc->Status = BLOCKED;
-    
     dispatcher(2);
     retPid = prev->pid;
     *status = prev->returnVal;
+    freeProc(prev);
+    // CurrentProc->children = prev->nextSibling;
+    //USLOSS_Console("Join(): PID: %d, Name %s, Status %d. \n", CurrentProc->children->pid, CurrentProc->children->name, CurrentProc->children->Status);
+    //freeProc(prev);
     //USLOSS_Console("Join(): We should not be here. \n");
     //USLOSS_Halt(1);
     return retPid;
@@ -453,6 +482,11 @@ void freeProc(Process *p)
     p->childStatus = EMPTY;
     p->startTime = -1;
     p->totalTime = 0;
+    p->isZapped = 0;
+    for(int j = 0; j < MAXPROC; j++){
+        p->calledZapped[j] = -1;
+    }
+    p->blockReason = 0;
 }
 
 /**
@@ -473,7 +507,7 @@ void quit(int status)
         USLOSS_Console("Quit(): Cannot quit the init process, Stopping Proces.");
         USLOSS_Halt(1);
     }
-
+    //USLOSS_Console("Quit(): Process %d is quitting with status %d.\n", CurrentProc->pid, status);
     if (CurrentProc->children != NULL)
     {
         USLOSS_Console("ERROR: Process pid %d called quit() while it still had children.\n", CurrentProc->pid);
@@ -489,6 +523,12 @@ void quit(int status)
     CurrentProc->parent->childRet = status;
     // Context swith to switchToPID
     // TEMP_switchTo(switchToPID);
+    int i = 0;
+    while(CurrentProc->calledZapped[i] != -1){
+        int index = CurrentProc->calledZapped[i] % MAXPROC;
+        ProcList[index].Status = READY;
+        i += 1;
+    }
     EnableInterupts();
     //USLOSS_Console("Quit(): Process %d is quitting with status %d.\n", CurrentProc->pid, status);
     dispatcher(1);
@@ -540,6 +580,9 @@ void dumpProcesses(void)
             case RUNNING:
                 USLOSS_Console("Running\n");
                 break;
+            case ZAPBLOCK:
+                USLOSS_Console("Blocked(waiting for zap target to quit)\n");
+                break;
             default:
                 USLOSS_Console("Runnable\n");
                 break;
@@ -568,21 +611,51 @@ void userMode(char *name)
 // to be implemented in 1b
 void zap(int pid)
 {
+    if(CurrentProc->pid == pid){
+        USLOSS_Console("Error: Process %d tried to zap (Suicide not allowed) itself.\n", CurrentProc->pid);
+        USLOSS_Halt(1);
+    }
+    int index = pid % MAXPROC;
+    if(ProcList[index].Status == EMPTY){
+        USLOSS_Console("Error: Process %d tried to zap a nonexistent process.\n", CurrentProc->pid);
+        USLOSS_Halt(1);
+    }
+    if(pid == 1){
+        USLOSS_Console("Error: Process %d tried to zap init (Stupid).\n", CurrentProc->pid);
+    }
+
+    ProcList[index].isZapped = 1;
+    int i = 0;
+    while(ProcList[index].calledZapped[i] != -1){
+        i +=1;
+    }
+    ProcList[index].calledZapped[i] = CurrentProc->pid;
+
+    CurrentProc->Status = ZAPBLOCK;
+    dispatcher(4);
+
 }
 
 int isZapped(void)
 {
-    return 0;
+    return CurrentProc->isZapped;
 }
+
+
 void blockMe(int newStatus)
 {
+    if(newStatus <= 10){
+        USLOSS_Console("Error: Blocke reason not valid\n");
+        USLOSS_Halt(1);
+    }
+    CurrentProc->blockReason = newStatus;
 }
 
 int unblockProc(int pid)
 {
     int index = pid % MAXPROC;
-    if (ProcList[index].Status == BLOCKED)
-    {
+    if(ProcList[index].blockReason != 0){
+        ProcList[index].blockReason = 0;
         ProcList[index].Status = READY;
         return 0;
     }
@@ -643,21 +716,12 @@ void dispatcher(int dev)
     // EnableInterrupts();
     userMode("dispatcher");
     DisableInterupts();
-    int min_priorty = 6;
+    int min_priorty = 10;
     int index = -1;
-    // if(dev == 2){
-    //      USLOSS_Console("dispatcher(): I was called by JOIN\n");
-    // }
-    // else if(dev == 2){
-    //     USLOSS_Console("dispatcher(): I was called by timeSlice\n");
-    // }
-    // else if(dev == 3){
-    //     USLOSS_Console("dispatcher(): I was called by fork1\n");
-    // }
-    for(int i = 3; i < MAXPROC; i++){
+    for(int i = 0; i < MAXPROC; i++){
         if(ProcList[i].Status == READY || ProcList[i].Status == JOIN ||ProcList[i].Status == RUNNING){
             //USLOSS_Console("~~i = %d~~", i);
-            if(ProcList[i].priority < min_priorty && ProcList[i].priority != -1){
+            if(ProcList[i].priority < min_priorty && ProcList[i].priority != -1 && ProcList[i].blockReason == 0){
                 //USLOSS_Console("dispatcher(): Process: %d || Name: %s || Pri: %d\n", ProcList[i].pid, ProcList[i].name, ProcList[i].priority);
                 min_priorty = ProcList[i].priority;
                 index = ProcList[i].pid;
@@ -693,4 +757,13 @@ void switchToIndex(int newpid){
     USLOSS_ContextSwitch(&(ProcList[indexFrom].state), &(ProcList[indexTo].state));
 }
 
-
+void procTreePrinter(){
+    Process *curr = CurrentProc->children;
+    while(curr != NULL){
+        USLOSS_Console("PID: %d\t", curr->pid);
+        USLOSS_Console("Status: %d\t", curr->Status);
+        USLOSS_Console("Priority: %d\t", curr->priority);
+        USLOSS_Console("Name: %s\n", curr->name);
+        curr = curr->nextSibling;
+    }
+}
