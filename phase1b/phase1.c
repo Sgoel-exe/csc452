@@ -8,10 +8,10 @@
  * @details The functions in this file are used to create and manage processes. The functions are fork1(), join(), quit(),
  * getpid(), dumpProcesses(), and startProcesses(). The functions are called by the testcases. These function are the
  * building blocks for a rudimentary process management system. They are responsible for creating processes, switching
- * between processes, and terminating processes.
+ * between processes, and terminating processes. There are also functions that are used to check the mode of the process, timeslicing, zapping, blocking, and unblocking. The mastermind behind the process management system is the dispatcher() function. It is responsible for switching between processes. The dispatcher() function is called by the functions in this file.
  *
  *
- * @authors Shrey Goel, Muhtasim Al-Farabi
+ * @authors Shrey Goel, Muhtasim Al-Farabi, Russ
  */
 
 //-----Include Files---------//
@@ -19,6 +19,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
+#include <time.h>
 
 //-----Definitions---------//
 #define EMPTY 0
@@ -26,9 +28,12 @@
 #define RUNNING 2
 #define QUIT 3
 #define JOIN 4
-#define BLOCKED 5
+#define JOINBLOCK 5
 #define ZAPPED 6
 #define CURRENT 7
+#define ZAPBLOCK 8
+#define SLICED 9
+#define BLOCKED 10
 
 typedef struct Process Process;
 
@@ -38,7 +43,7 @@ typedef struct Process Process;
 struct Process
 {
     int pid;                  // process id
-    int Status;               // EMPTY, READY, RUNNING, QUIT, JOIN, BLOCKED, ZAPPED, CURRENT
+    int Status;               // EMPTY, READY, RUNNING, QUIT, JOIN, JOINBLOCK, ZAPPED, CURRENT
     int priority;             // 1 - 7, where 6, and 7 are for sentinel and init
     char name[MAXNAME];       // process name
     USLOSS_Context state;     // process state for USLOSS
@@ -50,9 +55,13 @@ struct Process
     Process *parent;          // parent process
     Process *children;        // children processes
     Process *nextSibling;     // next sibling process (Linked list)
-    Process *ReadyChild;      // next child process that is ready to run
     int childRet;             // return value of the child
     int childStatus;          // status of the child
+    long int startTime;
+    long int totalTime;
+    int isZapped;              // 0 if not zapped, 1 if zapped
+    int calledZapped[MAXPROC]; // Saves PID of processes that called zap on this process
+    int blockReason;           // 0 is unblocked, else blocked for reasons
 };
 
 //-----Global Vars---------//
@@ -65,33 +74,41 @@ struct Process
  * fork1(), join(), quit().
  */
 Process ProcList[MAXPROC];
-
-Process *ReadyProcessHead;
-
 Process *CurrentProc;
 int nextPID = 1;
 int prevProc = -1;
 
+// DEBUG var
+int debug1 = 0;
+
 //-----Function Prototypes---------//
+
 void trampoline(void);
 int sentinel(char *);
 int initFunc(char *);
 int testMain_trampoline(char *);
 void userMode(char *);
 void freeProc(Process *);
+void dispatcher(int);
+void clockHandler(int, void *);
+void timeSlice(void);
+void DisableInterupts(void);
+void EnableInterupts(void);
+void switchToIndex(int);
 
 //-----Function Implementations---------//
-
 /**
  * @brief Initializes the process table and forks the sentinel process. It also forks the testcasemain process.
  */
 void phase1_init(void)
 {
+    DisableInterupts();
+    // for future phases
     phase2_start_service_processes();
     phase3_start_service_processes();
     phase4_start_service_processes();
     phase5_start_service_processes();
-
+    USLOSS_IntVec[USLOSS_CLOCK_INT] = clockHandler;
     memset(ProcList, 0, sizeof(ProcList));
     // Initialize the proccess list
     for (int i = 0; i < MAXPROC; i++)
@@ -108,13 +125,17 @@ void phase1_init(void)
         ProcList[i].children = NULL;
         ProcList[i].parent = NULL;
         ProcList[i].nextSibling = NULL;
-        ProcList[i].ReadyChild = NULL;
         ProcList[i].childRet = -1;
         ProcList[i].childStatus = EMPTY;
+        ProcList[i].startTime = -1;
+        ProcList[i].totalTime = 0;
+        ProcList[i].isZapped = 0;
+        for (int j = 0; j < MAXPROC; j++)
+        {
+            ProcList[i].calledZapped[j] = -1;
+        }
+        ProcList[i].blockReason = 0;
     }
-
-    ReadyProcessHead = NULL; // Initialize the ready process Linked-list
-
     // Initialize PCB for init
     int index = nextPID;
     ProcList[index].pid = 1;
@@ -128,7 +149,7 @@ void phase1_init(void)
     USLOSS_ContextInit(&(ProcList[index].state), ProcList[index].stack, ProcList[index].stackSize, NULL, trampoline);
 
     CurrentProc = &(ProcList[index]);
-    // Call Fork1 to start sentinell
+    // Call Fork1 to start sentinel
     int res = fork1("sentinel", sentinel, NULL, USLOSS_MIN_STACK, 7);
     if (res < 0)
     {
@@ -138,16 +159,19 @@ void phase1_init(void)
 
     // Call Fork1 to start testcase_main
     res = fork1("testcase_main", testMain_trampoline, NULL, USLOSS_MIN_STACK, 3);
-    USLOSS_Console("Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using fork1() to create it.\n");
-    TEMP_switchTo(res);
+    EnableInterupts();
+    dispatcher(0);
+    USLOSS_Console("Achivement Unlocked: How did we get here?\n");
 }
 
 /**
  * @brief This function is called in the init process. It is a temporary hack to call the testcase_main() function.
+ *
+ * @param idk This is a placeholder for the argument that is passed to the testcase_main() function.
  */
-int initFunc(char *IDK)
+int initFunc(char *idk)
 {
-    USLOSS_Console("Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.");
+    USLOSS_Console("testcase_main() returned, simulation will now halt.");
     USLOSS_Halt(0);
     return 0;
 }
@@ -157,9 +181,29 @@ int initFunc(char *IDK)
  */
 void startProcesses(void)
 {
-
     CurrentProc = &(ProcList[0]);
+    dispatcher(0);
     USLOSS_Halt(0);
+}
+
+/**
+ * @brief This function enables kernel interupts.
+ */
+
+void EnableInterupts()
+{
+    int result = USLOSS_PsrSet(USLOSS_PsrGet() | USLOSS_PSR_CURRENT_INT);
+    assert(result == USLOSS_DEV_OK);
+}
+
+/**
+ * @brief This function disables kernel interupts.
+ */
+
+void DisableInterupts()
+{
+    int result = USLOSS_PsrSet(USLOSS_PsrGet() & ~USLOSS_PSR_CURRENT_INT);
+    assert(result == USLOSS_DEV_OK);
 }
 
 /**
@@ -169,6 +213,7 @@ void startProcesses(void)
  */
 int findNextIndex()
 {
+    DisableInterupts();
     int retIndex = -1;
     int i;
     int searchPid = nextPID;
@@ -178,7 +223,6 @@ int findNextIndex()
         if (ProcList[i].Status == EMPTY)
         {
             retIndex = i;
-            // nextPID++;
             break;
         }
         else
@@ -194,7 +238,6 @@ int findNextIndex()
             if (ProcList[i].Status == EMPTY)
             {
                 retIndex = i;
-                // nextPID++;
                 break;
             }
             else
@@ -203,83 +246,9 @@ int findNextIndex()
             }
         }
     }
-
+    EnableInterupts();
     return retIndex;
 }
-
-/**
- * @brief Returns the next PID to be used.
- */
-int getNextPID()
-{
-    return nextPID;
-}
-
-/**
- * @brief Prints the details of the process at the given pid (test function for phase1b)
- */
-void ProcPrinter(int pid)
-{
-    // Print Details about the proccess ath given pid
-    USLOSS_Console("PID: %d\t", ProcList[pid % MAXPROC].pid);
-    USLOSS_Console("Status: %d\t", ProcList[pid % MAXPROC].Status);
-    USLOSS_Console("Priority: %d\t", ProcList[pid % MAXPROC].priority);
-    USLOSS_Console("Name: %s\n", ProcList[pid % MAXPROC].name);
-}
-
-void readyListAdd(Process *entry)
-{
-    if (ReadyProcessHead == NULL)
-    {
-        ReadyProcessHead = entry;
-    }
-    else
-    {
-        // Add sorted by priority
-        Process *curr = ReadyProcessHead;
-        while (curr->ReadyChild != NULL)
-        {
-            if (curr->ReadyChild->priority <= entry->priority)
-            {
-                break;
-            }
-            curr = curr->ReadyChild;
-        }
-        if (curr->ReadyChild != NULL) // This is wierd MAybe we switch this to == NULL
-        {
-            curr->ReadyChild = entry;
-        }
-        else
-        {
-            Process *temp = curr->ReadyChild;
-            curr->ReadyChild = entry;
-            curr->ReadyChild->ReadyChild = temp;
-        }
-    }
-}
-
-
-void readyListDel(Process* entry){
-    Process* curr = ReadyProcessHead;
-    entry->Status = CURRENT;
-    while(curr->ReadyChild != NULL && curr->ReadyChild != entry){
-        curr = curr->ReadyChild;
-    }
-    if(curr->ReadyChild == NULL){
-        if(curr->pid == entry->pid){
-            curr = NULL;
-        }
-        else{
-            USLOSS_Console("ERROR: readyListDel(): Process not found in ready list.\n");
-            //USLOSS_Halt(1);
-        }
-    }
-    else{
-        curr->ReadyChild = curr->ReadyChild->ReadyChild;
-    }
-
-}
-
 
 /**
  * @brief Creates a new process and adds it to the process table. The process is added to the parent's children list.
@@ -296,24 +265,30 @@ void readyListDel(Process* entry){
 int fork1(char *name, int (*startFunc)(char *), char *arg, int stacksize, int priority)
 {
     userMode("fork1");
+
     // Check for errors
+    DisableInterupts();
     if (stacksize < USLOSS_MIN_STACK)
     {
+        EnableInterupts();
         return -2;
     }
     if (strcmp(name, "sentinel") != 0 && priority > 5)
     {
+        EnableInterupts();
         return -1;
     }
 
     if (priority < 1 || startFunc == NULL || name == NULL || strlen(name) > MAXNAME)
     {
+        EnableInterupts();
         return -1;
     }
 
     int procIndex = findNextIndex();
     if (procIndex == -1)
     {
+        EnableInterupts();
         return -1;
     }
 
@@ -333,9 +308,11 @@ int fork1(char *name, int (*startFunc)(char *), char *arg, int stacksize, int pr
     ProcList[procIndex].children = NULL;
     ProcList[procIndex].parent = CurrentProc;
     ProcList[procIndex].nextSibling = NULL;
-    ProcList[procIndex].childRet = -1;
     ProcList[procIndex].childStatus = EMPTY;
     ProcList[procIndex].parent->childStatus = READY;
+    ProcList[procIndex].parent->childRet = -1;
+    ProcList[procIndex].startTime = 0;
+    ProcList[procIndex].totalTime = 0;
     USLOSS_ContextInit(&(ProcList[procIndex].state), ProcList[procIndex].stack, ProcList[procIndex].stackSize, NULL, trampoline);
 
     // Add to parent's children list
@@ -351,6 +328,12 @@ int fork1(char *name, int (*startFunc)(char *), char *arg, int stacksize, int pr
         ProcList[procIndex].nextSibling = temp;
     }
     ++nextPID;
+    if (strcmp(name, "sentinel") == 0)
+    {
+        return ProcList[procIndex].pid;
+    }
+    EnableInterupts();
+    dispatcher(3);
     return ProcList[procIndex].pid;
 }
 
@@ -360,8 +343,8 @@ int fork1(char *name, int (*startFunc)(char *), char *arg, int stacksize, int pr
 void trampoline()
 {
     int res = USLOSS_PsrSet(USLOSS_PSR_CURRENT_MODE | USLOSS_PSR_CURRENT_INT);
-    CurrentProc->startFunc(CurrentProc->startArgs);
-    res += 1;
+    res = CurrentProc->startFunc(CurrentProc->startArgs);
+    quit(res);
 }
 
 /**
@@ -374,7 +357,7 @@ void trampoline()
 int testMain_trampoline(char *PlaceHolder)
 {
     testcase_main();
-    USLOSS_Console("Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.\n");
+    // USLOSS_Console("Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.\n");
     USLOSS_Halt(0);
     return 0;
 }
@@ -389,7 +372,11 @@ int sentinel(char *arg)
 {
     while (1)
     {
-        phase2_check_io();
+        if (phase2_check_io() == 0)
+        {
+            USLOSS_Console("DEADLOCK DETECTED!  All of the processes have blocked, but I/O is not ongoing.\n");
+            USLOSS_Halt(1);
+        }
         USLOSS_WaitInt();
     }
 }
@@ -405,42 +392,59 @@ int sentinel(char *arg)
  */
 int join(int *status)
 {
-    Process *current = CurrentProc; // current = parent
-    Process *curr = current->children;
-    if (curr == NULL)
+    userMode("join");
+    DisableInterupts();
+    // Error checking
+    if (CurrentProc->children == NULL)
     {
         return -2;
     }
-
-    // Check Head is quit
-    if (curr->Status == QUIT)
+    // while have a child, remove child from children list if child has quit
+    while (CurrentProc->children != NULL)
     {
-        *status = curr->returnVal;
-        int retPid = curr->pid;
-        current->children = curr->nextSibling;
-        freeProc(curr);
-        return retPid;
-    }
-
-    // checking the rest of the children
-    Process *prev = curr;
-    curr = curr->nextSibling;
-    while (curr != NULL)
-    {
-        if (curr->Status == QUIT)
+        Process *child = CurrentProc->children;
+        int pid = -2;
+        Process *prev = NULL;
+        while (child != NULL)
         {
-            *status = curr->returnVal;
-            int retPid = curr->pid;
-            prev->nextSibling = curr->nextSibling;
-            freeProc(curr);
-            return retPid;
+            if (child->Status == QUIT)
+            {
+                if (prev == NULL)
+                {
+                    CurrentProc->children = child->nextSibling;
+                }
+                else
+                {
+                    prev->nextSibling = child->nextSibling;
+                }
+
+                break;
+            }
+            if (child->Status == READY)
+            {
+                CurrentProc->Status = JOINBLOCK;
+            }
+            prev = child;
+            child = child->nextSibling;
         }
-        prev = curr;
-        curr = curr->nextSibling;
+        if (child == NULL)
+        {
+            CurrentProc->Status = JOINBLOCK;
+            EnableInterupts();
+            dispatcher(5);
+        }
+        else
+        {
+            // returning child's info to parent
+            *status = child->returnVal;
+            pid = child->pid;
+            freeProc(child);
+            CurrentProc->Status = READY;
+            EnableInterupts();
+            dispatcher(5);
+            return pid;
+        }
     }
-    // If no children are quit, block the process
-    USLOSS_Console("Join(): We should not be here. \n");
-    USLOSS_Halt(1);
     return -2;
 }
 
@@ -451,6 +455,7 @@ int join(int *status)
  */
 void freeProc(Process *p)
 {
+    DisableInterupts();
     p->pid = -1;
     p->Status = EMPTY;
     p->priority = -1;
@@ -463,9 +468,17 @@ void freeProc(Process *p)
     p->children = NULL;
     p->parent = NULL;
     p->nextSibling = NULL;
-    p->ReadyChild = NULL;
     p->childRet = -1;
     p->childStatus = EMPTY;
+    p->startTime = -1;
+    p->totalTime = 0;
+    p->isZapped = 0;
+    for (int j = 0; j < MAXPROC; j++)
+    {
+        p->calledZapped[j] = -1;
+    }
+    p->blockReason = 0;
+    EnableInterupts();
 }
 
 /**
@@ -479,45 +492,43 @@ void quit(int status)
 {
     userMode("quit");
 
+    DisableInterupts();
     // Error checking
+
     if (CurrentProc->pid == 1)
     {
         USLOSS_Console("Quit(): Cannot quit the init process, Stopping Proces.");
         USLOSS_Halt(1);
     }
-
     if (CurrentProc->children != NULL)
     {
         USLOSS_Console("ERROR: Process pid %d called quit() while it still had children.\n", CurrentProc->pid);
         USLOSS_Halt(1);
     }
-
     // Change Currents status
     CurrentProc->Status = QUIT;
     CurrentProc->returnVal = status;
-    // Change currents parents child status
-    CurrentProc->parent->childStatus = QUIT;
-    CurrentProc->parent->childRet = status;
-    // Context swith to switchToPID
-    // TEMP_switchTo(switchToPID);
-}
-
-/**
- * @brief This function switches the current process to the process with the given PID. This is a temporary hack for phase1a.
- *
- * @param newpid This is the PID of the process that the current process will switch to.
- */
-void TEMP_switchTo(int newpid)
-{
-    int indexFrom = (CurrentProc->pid % MAXPROC);
-    int indexTo = newpid % MAXPROC;
-    CurrentProc = &(ProcList[indexTo]);
-    CurrentProc->Status = RUNNING;
     if (CurrentProc->parent != NULL)
     {
-        CurrentProc->parent->Status = READY;
+        if (CurrentProc->parent->Status == JOINBLOCK)
+        {
+            CurrentProc->parent->Status = READY;
+        }
     }
-    USLOSS_ContextSwitch(&(ProcList[indexFrom].state), &(ProcList[indexTo].state));
+
+    // Unblock all processes that called zap on this process
+    int i = 0;
+    while (CurrentProc->calledZapped[i] != -1)
+    {
+        int index = CurrentProc->calledZapped[i] % MAXPROC;
+        if (ProcList[index].Status == ZAPBLOCK)
+        {
+            ProcList[index].Status = READY;
+        }
+        i += 1;
+    }
+    EnableInterupts();
+    dispatcher(1);
 }
 
 /**
@@ -533,6 +544,7 @@ int getpid(void)
  */
 void dumpProcesses(void)
 {
+    DisableInterupts();
     USLOSS_Console(" PID  PPID  NAME              PRIORITY  STATE\n");
     for (int i = 0; i < MAXPROC; i++)
     {
@@ -548,12 +560,25 @@ void dumpProcesses(void)
             case RUNNING:
                 USLOSS_Console("Running\n");
                 break;
-            default:
+            case ZAPBLOCK:
+                USLOSS_Console("Blocked(waiting for zap target to quit)\n");
+                break;
+            case JOINBLOCK:
+                USLOSS_Console("Blocked(waiting for child to quit)\n");
+                break;
+            case BLOCKED:
+                USLOSS_Console("Blocked(%d)\n", ProcList[i].blockReason);
+                break;
+            case READY:
                 USLOSS_Console("Runnable\n");
+                break;
+            default:
+                USLOSS_Console("Status: %d\n", ProcList[i].Status);
                 break;
             }
         }
     }
+    EnableInterupts();
 }
 
 /**
@@ -568,48 +593,267 @@ void userMode(char *name)
         USLOSS_Console("ERROR: Someone attempted to call %s while in user mode!\n", name);
         USLOSS_Halt(1);
     }
+    else
+    {
+        EnableInterupts();
+    }
 }
 
-// to be implemented in 1b
+/**
+ * @brief This function is called by a process to zap another process. The function changes the status of the process to ZAPBLOCKED.
+ *
+ * @param pid This is the PID of the process that is to be zapped.
+ */
 void zap(int pid)
 {
+    DisableInterupts();
+    if (CurrentProc->pid == pid)
+    {
+        USLOSS_Console("ERROR: Attempt to zap() itself.\n");
+        USLOSS_Halt(1);
+    }
+    if (pid <= 0)
+    {
+        USLOSS_Console("ERROR: Attempt to zap() a PID which is <=0.  other_pid = %d\n", pid);
+        USLOSS_Halt(1);
+    }
+    if (pid == 1)
+    {
+        USLOSS_Console("ERROR: Attempt to zap() init.\n", CurrentProc->pid);
+        USLOSS_Halt(1);
+    }
+    int index = pid % MAXPROC;
+    if (ProcList[index].Status == QUIT)
+    {
+        USLOSS_Console("ERROR: Attempt to zap() a process that is already in the process of dying.\n");
+        USLOSS_Halt(1);
+    }
+    if (ProcList[index].Status == EMPTY || ProcList[index].pid != pid)
+    {
+        USLOSS_Console("ERROR: Attempt to zap() a non-existent process.\n");
+        USLOSS_Halt(1);
+    }
+
+    ProcList[index].isZapped = 1;
+    int i = 0;
+    while (ProcList[index].calledZapped[i] != -1)
+    {
+        i += 1;
+    }
+    ProcList[index].calledZapped[i] = CurrentProc->pid;
+
+    CurrentProc->Status = ZAPBLOCK;
+    EnableInterupts();
+    dispatcher(0);
 }
+
+/**
+ * @brief This function checks if the current process has been zapped.
+ *
+ */
 
 int isZapped(void)
 {
-}
-void blockMe(int newStatus)
-{
+    return CurrentProc->isZapped;
 }
 
+/**
+ * @brief This function tries to blocks itself for a given reason
+ *
+ * @param newStatus This is the reason for blocking
+ */
+
+void blockMe(int newStatus)
+{
+    DisableInterupts();
+    if (newStatus <= 10)
+    {
+        USLOSS_Console("Error: Block reason not valid\n");
+        USLOSS_Halt(1);
+    }
+    CurrentProc->blockReason = newStatus;
+    CurrentProc->Status = BLOCKED;
+    EnableInterupts();
+    dispatcher(6);
+}
+/**
+ * @brief This function tries to unblocks a process with a given PID.
+ *
+ * @param pid This is the PID of the process that is to be unblocked
+ */
 int unblockProc(int pid)
 {
+    DisableInterupts();
     int index = pid % MAXPROC;
-    if (ProcList[index].Status == BLOCKED)
+    if (ProcList[index].blockReason != 0)
     {
+        ProcList[index].blockReason = 0;
         ProcList[index].Status = READY;
+        EnableInterupts();
+        dispatcher(6);
         return 0;
     }
+    EnableInterupts();
     return -2;
 }
 
-int readCurStartTime(void)
+// Code provided to us by phase1b instructions
+void clockHandler(int dev, void *arg)
 {
+    if (debug1)
+    {
+        USLOSS_Console("clockHandler(): PSR = %d\n", USLOSS_PsrGet());
+        USLOSS_Console("clockHandler(): currentTime = %d\n", currentTime());
+    }
+    /* make sure to call this first, before timeSlice(), since we want to do
+     * the Phase 2 related work even if process(es) are chewing up lots of
+     * CPU.
+     */
+    phase2_clockHandler();
+    // call the dispatcher if the time slice has expired
+    timeSlice();
+    /* when we return from the handler, USLOSS automatically re-enables
+     * interrupts and disables kernel mode (unless we were previously in
+     * kernel code). Or I think so. I haven’t double-checked yet. TODO
+     */
 }
 
+/**
+ * @brief This function returns the current CPU time in microseconds.
+ */
+
+int readCurStartTime(void)
+{
+    // Return current CPU time in microseconds
+    CurrentProc->startTime = currentTime();
+    return CurrentProc->startTime;
+}
+
+// Code provided to us by phase1b instructions
 int currentTime(void)
 {
+    int retval = 0;
+    int result = USLOSS_DeviceInput(USLOSS_CLOCK_DEV, 0, &retval);
+    assert(result == USLOSS_DEV_OK);
+    return retval;
 }
+
+/**
+ * @brief This function returns the total time that the process has been running in the CPU.
+ */
 
 int readtime(void)
 {
+    return CurrentProc->totalTime;
 }
 
+/**
+ * @brief This function times slices a process if it has been running for more than 80 miliseconds.
+ */
 void timeSlice(void)
 {
+    if (currentTime() - CurrentProc->startTime >= 80000)
+    {
+        CurrentProc->totalTime += currentTime() - CurrentProc->startTime;
+        readCurStartTime();
+        CurrentProc->Status = SLICED;
+        dispatcher(CurrentProc->pid);
+    }
 }
 
-void dispatcher(void)
+/**
+ * @brief This function switches the current process to another process by priority.
+ *
+ * @param dev For development purposes
+ */
+
+void dispatcher(int dev)
 {
-    // EnableInterrupts();
+    userMode("dispatcher");
+    DisableInterupts();
+    int min_priorty = 10;
+    int index = -1;
+    // Find the process with the lowest priority
+    for (int i = 0; i < MAXPROC; i++)
+    {
+        if (i == 1)
+        {
+            continue;
+        }
+
+        if (ProcList[i].Status == READY || ProcList[i].Status == JOIN || ProcList[i].Status == RUNNING)
+        {
+            // maybe be useful for optimization
+            // if (ProcList[i].priority == min_priorty)
+            // {
+            //     if (ProcList[i].isZapped == 1)
+            //     {
+            //         index = ProcList[i].pid;
+            //         continue;
+            //     }
+            // }
+            if (ProcList[i].priority < min_priorty && ProcList[i].priority != -1)
+            {
+                min_priorty = ProcList[i].priority;
+                index = ProcList[i].pid;
+            }
+        }
+    }
+
+    // zapped processes first
+    for (int i = index; i < MAXPROC; i++)
+    {
+        if (ProcList[i].isZapped == 1 && (ProcList[i].Status == READY || ProcList[i].Status == JOIN || ProcList[i].Status == RUNNING))
+        {
+            if (ProcList[i].priority == min_priorty)
+            {
+                index = ProcList[i].pid;
+            }
+        }
+    }
+    // check for sentinel
+    if (index == 2)
+    {
+        for (int i = index; i < MAXPROC; i++)
+        {
+            if (ProcList[i].Status == SLICED && ProcList[i].pid != dev)
+            {
+                if (ProcList[i].priority < min_priorty)
+                {
+                    min_priorty = ProcList[i].priority;
+                    index = ProcList[i].pid;
+                }
+                index = ProcList[i].pid;
+            }
+        }
+    }
+    if (index == -1)
+    {
+        return;
+    }
+    else
+    {
+        if (CurrentProc->Status == RUNNING)
+        {
+            CurrentProc->Status = READY;
+        }
+        switchToIndex(index);
+    }
+}
+
+/**
+ * @brief This function switches the current process to another process by PID.
+ * 
+ * @param newpid This is the PID of the process that the current process will switch to.
+*/
+
+void switchToIndex(int newpid)
+{
+    int indexFrom = (CurrentProc->pid % MAXPROC);
+    int indexTo = newpid % MAXPROC;
+    CurrentProc = &(ProcList[indexTo]);
+    CurrentProc->Status = RUNNING;
+    EnableInterupts();
+    readCurStartTime();
+    USLOSS_ContextSwitch(&(ProcList[indexFrom].state), &(ProcList[indexTo].state));
 }
