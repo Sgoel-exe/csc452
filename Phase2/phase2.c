@@ -33,6 +33,7 @@ typedef struct MailBox{
     int mboxID;
     int slotSize;
     int numSlots;
+    int currentNumOfSlots;
     int status;
     Queue slots;
     Queue senders;
@@ -51,6 +52,10 @@ typedef struct MailSlot{
 //------The Process------//
 typedef struct ShadowProc{
     int pid;
+    int index;
+    void *msg_ptr;
+    int msg_size;
+    MailSlot * mailSlot;
     ShadowProc* next;
 }ShadowProc;
 
@@ -87,6 +92,7 @@ void phase2_init(void){
         mailboxes[i].mboxID = -1;
         mailboxes[i].slotSize = -1;
         mailboxes[i].numSlots = -1;
+        mailboxes[i].currentNumOfSlots = 0;
         mailboxes[i].status = EMPTY;
         Queue_init(&mailboxes[i].slots, 0);
         Queue_init(&mailboxes[i].senders, 1);
@@ -105,6 +111,10 @@ void phase2_init(void){
     //Initialize the shadow processes
     for(int i = 0; i < MAXPROC; i++){
         shadowProcs[i].pid = -1;
+        shadowProcs[i].msg_ptr = NULL;
+        shadowProcs[i].msg_size = -1;
+        shadowProcs[i].mailSlot = NULL;
+        shadowProcs[i].index = i;
         shadowProcs[i].next = NULL;
     }
 
@@ -174,6 +184,9 @@ int findNextMBoxID(){
 }
 
 int createMailSlot(int mboxID, char * message, int messageSize){
+    if(mailboxes[mboxID].currentNumOfSlots == mailboxes[mboxID].numSlots){
+        return -1;
+    }
     if(nextSlotID == MAXSLOTS || mailSlots[nextSlotID].status != EMPTY){
         nextSlotID = findNextSlotID();
         if(nextSlotID == -1){
@@ -184,7 +197,8 @@ int createMailSlot(int mboxID, char * message, int messageSize){
     mailSlots[nextSlotID].mboxID = mboxID;
     mailSlots[nextSlotID].status = ACTIVE;
     mailSlots[nextSlotID].messageSize = messageSize;
-    strcpy(mailSlots[nextSlotID].message, message);
+    // USLOSS_Console("createMailSlot(): messageSize = %d,  Message: %s\n", messageSize, message);
+    strncpy(mailSlots[nextSlotID].message, message, messageSize);
     mailSlots[nextSlotID].next = NULL;
     nextSlotID++;
     return nextSlotID - 1;
@@ -201,7 +215,7 @@ int findNextSlotID(){
     return -1;
 }
 
-int createShadowProc(int pid){
+int createShadowProc(int pid, void **msg_ptr, int msg_size){
     if(pid < 0 || pid >= MAXPROC){
         return -1;
     }
@@ -212,6 +226,8 @@ int createShadowProc(int pid){
         }
     }
     shadowProcs[nextProcID].pid = pid;
+    shadowProcs[nextProcID].msg_ptr = msg_ptr;
+    shadowProcs[nextProcID].msg_size = msg_size;
     shadowProcs[nextProcID].next = NULL;
     nextProcID++;
     return nextProcID - 1;
@@ -246,34 +262,47 @@ int SendHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
     if(msg_size > 0 && msg_ptr == NULL){
         return -1;
     }
+    //IF we have a reciver that is waiting, We can send the message
+    //Else we need to block the sender
+    //What if The proccess is the sender and the reciver? We can not block it per say
+    if(mailboxes[mbox_id].recievers.size > 0){
+        ShadowProc * shadowProc = Queue_pop(&(mailboxes[mbox_id].recievers));
+        //USLOSS_Console("SendHelper(): messageSize = %d,  Message: %s\n", msg_size, msg_ptr);
+        strncpy(shadowProc->mailSlot->message, msg_ptr, msg_size);
+        // USLOSS_Console("SendHelper(): messageSize = %d,  Message: %s\n", shadowProc->mailSlot->messageSize, shadowProc->mailSlot->message);
+        shadowProc->mailSlot->messageSize = msg_size;
+        shadowProc->msg_ptr = msg_ptr;
+        shadowProc->msg_size = msg_size;
 
-    //Create a mailslot
-    int mailSlotID = createMailSlot(mbox_id, msg_ptr, msg_size);
-    if(mailSlotID == -1){
-        if(!canBlock){
-            return -2;
-        }
-        USLOSS_Console("SendHelper(): MailSlot could not be created pid:%d\n", getpid());
-        blockMe(MAILBLOCK);
-    }
-    Queue_push(&mailboxes[mbox_id].slots, &mailSlots[mailSlotID]);
-
-    //Check REcievers
-    if((Queue_front(&mailboxes[mbox_id].recievers) != NULL) && (mailboxes[mbox_id].slots.size <) ){
-        int shadowProcID = createShadowProc(getpid());
-        Queue_push(&mailboxes[mbox_id].senders, &shadowProcs[shadowProcID]);
-        if(!canBlock){
-            return -2;
-        }
-        USLOSS_Console("SendHelper(): No Recivers pid:%d\n", getpid());
-        blockMe(MAILBLOCK);
-        USLOSS_Console("SendHelper(): After Bklocking%d\n", getpid());
+        mailboxes[mbox_id].currentNumOfSlots--;
+        // USLOSS_Console("SendHelper(): Current Mail Slots: %d\n", mailboxes[mbox_id].currentNumOfSlots);
+        unblockProc(shadowProc->pid);
+        return 0;
     }
     else{
-        ShadowProc * shadowProc = (ShadowProc *)Queue_pop(&mailboxes[mbox_id].recievers);
-        unblockProc(shadowProc->pid);
+        int mailSlotID = createMailSlot(mbox_id, msg_ptr, msg_size);
+        while(mailSlotID == -1){
+            // USLOSS_Console("SendHelper(): Could not create mail slot\n");
+            if(!canBlock){
+                return -2;
+            }
+            blockMe(MAILBLOCK);
+            mailSlotID = createMailSlot(mbox_id, msg_ptr, msg_size);  
+        }
+        mailboxes[mbox_id].currentNumOfSlots++;
+        MailSlot * mailSlot = &mailSlots[mailSlotID];
+        int shadowProcID = createShadowProc(getpid(), msg_ptr, msg_size);
+        if(shadowProcID == -1){
+            return -1;
+        }
+        ShadowProc * shadowProc = &shadowProcs[shadowProcID];
+        shadowProc->mailSlot = mailSlot;
+        // strncpy(shadowProc->mailSlot->message, msg_ptr, msg_size);
+        shadowProc->msg_ptr = msg_ptr;
+        shadowProc->msg_size = msg_size;
+        Queue_push(&(mailboxes[mbox_id].senders), shadowProc);
+        return 0;
     }
-    return 0;
 }
 
 
@@ -301,26 +330,54 @@ int RecvHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
         if(msg_size > 0 && msg_ptr == NULL){
         return -1;
     }
+    //IF we have a message waiting, we can recieve it
+    //Else we need to block the reciver until a message is sent
+    //NOte we have 0 slot mail boxes and 0 length messages
+    if(mailboxes[mbox_id].senders.size > 0){
+        ShadowProc * shadowProc = Queue_pop(&(mailboxes[mbox_id].senders));
+        // MailSlot * mailSlot = Queue_pop(&(mailboxes[mbox_id].slots));
+        strncpy(msg_ptr, shadowProc->mailSlot->message, shadowProc->mailSlot->messageSize);
+        shadowProc->mailSlot->status = EMPTY;
+        int temp_size = shadowProc->mailSlot->messageSize;
+        shadowProc->mailSlot->messageSize = -1;
+        shadowProc->mailSlot->message[0] = '\0';
+        shadowProc->msg_ptr = NULL;
+        shadowProc->msg_size = -1;
 
-    int shadowProcID = createShadowProc(getpid());
-    // USLOSS_Console("Reahced Here :)\n");
-    if(Queue_front(&mailboxes[mbox_id].senders) == NULL){
-        Queue_push(&mailboxes[mbox_id].recievers, &shadowProcs[shadowProcID]);
+        mailboxes[mbox_id].currentNumOfSlots--;
+        // USLOSS_Console("RECVHelper(): Current Mail slots %d\n", mailboxes[mbox_id].currentNumOfSlots);
+        unblockProc(shadowProc->pid);
+        shadowProc->pid = -1;
+        //Queue_push(&(mailboxes[mbox_id].recievers), shadowProc);
+        return temp_size;
+    }
+    else{
+        int shadowProcID = createShadowProc(getpid(), &msg_ptr, msg_size);
+        if(shadowProcID == -1){
+            USLOSS_Console("RecvHelper(): Could not create shadow process\n");
+            return -1;
+        }
+        ShadowProc * shadowProc = &shadowProcs[shadowProcID];
+        int mailSlotID = createMailSlot(mbox_id, msg_ptr, msg_size);
+        while(mailSlotID == -1){
+            USLOSS_Console("RecvHelper(): Could not create mail slot\n");
+            if(!canBlock){
+                return -2;
+            }
+            blockMe(MAILBLOCK);
+            mailSlotID = createMailSlot(mbox_id, msg_ptr, msg_size);
+        }
+        mailboxes[mbox_id].currentNumOfSlots++;
+        shadowProc->mailSlot = &mailSlots[mailSlotID];
+        Queue_push(&(mailboxes[mbox_id].recievers), &shadowProcs[shadowProcID]);
         if(!canBlock){
             return -2;
         }
-        USLOSS_Console("SendHelper(): No senders pid:%d\n", getpid());
         blockMe(MAILBLOCK);
-        // return mailSlot->messageSize;
+        strncpy(msg_ptr, shadowProc->mailSlot->message, shadowProc->mailSlot->messageSize);
+        return shadowProc->mailSlot->messageSize;
     }
-    else{
-        ShadowProc * shadowProc = (ShadowProc *)Queue_pop(&mailboxes[mbox_id].senders);
-        unblockProc(shadowProc->pid);
-    }
-    MailSlot * mailSlot = (MailSlot *)Queue_pop(&mailboxes[mbox_id].slots);
-    //Probably go thru a for loop and put each value into the buffer
-    strncpy(msg_ptr, mailSlot->message, msg_size);
-    return mailSlot->messageSize;
+
 }
 
 
@@ -440,4 +497,23 @@ void syscallHandler(int dev, void *arg){
 
 void phase2_clockHandler(void){
 
+}
+
+
+//---------------------------Mr Clean---------------------------//
+void cleanProc(int index){
+    shadowProcs[index].pid = -1;
+    shadowProcs[index].msg_ptr = NULL;
+    shadowProcs[index].msg_size = -1;
+    shadowProcs[index].mailSlot = NULL;
+    shadowProcs[index].next = NULL;
+}
+
+void cleanSlot(int index){
+    mailboxes[mailSlots[index].mboxID].currentNumOfSlots--;
+    mailSlots[index].mboxID = -1;
+    mailSlots[index].status = EMPTY;
+    mailSlots[index].messageSize = -1;
+    mailSlots[index].message[0] = '\0';
+    mailSlots[index].next = NULL;
 }
