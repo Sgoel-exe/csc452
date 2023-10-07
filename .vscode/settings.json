@@ -59,5 +59,8 @@
   "DockerRun.DisableDockerrc": true,
   "DockerRun.Containers": [
     "faa73a4ea8a7"
-  ]
+  ],
+  "files.associations": {
+    "system_error": "c"
+  }
 }
