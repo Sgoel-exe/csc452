@@ -32,12 +32,12 @@ typedef struct Queue{
 typedef struct MailBox{
     int mboxID;
     int slotSize;
-    int numSlots;
+    int totalSlots;
     int currentNumOfSlots;
     int status;
     Queue slots;
-    Queue senders;
-    Queue recievers;
+    Queue pros;
+    Queue cons;
 }MailBox;
 
 //------The Mail Slot------//
@@ -76,12 +76,12 @@ int findNextSlotID();
 int createMailSlot(int mboxID, char * message, int messageSize);
 
 //------Global Variables------//
-MailBox mailboxes[MAXMBOX];
+MailBox mailBoxes[MAXMBOX];
 MailSlot mailSlots[MAXSLOTS];
-ShadowProc shadowProcs[MAXPROC];
+ShadowProc conProcs[MAXPROC];
+ShadowProc proProcs[MAXPROC];
 int nextMBoxID = 0;  //Next available mailbox ID
 int nextSlotID = 0;  //Next available slot ID
-int nextProcID = 0;  //Next available process ID
 
 void (*systemCallVec[MAXSYSCALLS])(USLOSS_Sysargs *args);
 
@@ -89,14 +89,14 @@ void phase2_init(void){
 
     //Initialize the mailboxes
     for(int i = 0; i < MAXMBOX; i++){
-        mailboxes[i].mboxID = -1;
-        mailboxes[i].slotSize = -1;
-        mailboxes[i].numSlots = -1;
-        mailboxes[i].currentNumOfSlots = 0;
-        mailboxes[i].status = EMPTY;
-        Queue_init(&mailboxes[i].slots, 0);
-        Queue_init(&mailboxes[i].senders, 1);
-        Queue_init(&mailboxes[i].recievers, 1);
+        mailBoxes[i].mboxID = -1;
+        mailBoxes[i].slotSize = -1;
+        mailBoxes[i].totalSlots = -1;
+        mailBoxes[i].currentNumOfSlots = 0;
+        mailBoxes[i].status = EMPTY;
+        Queue_init(&mailBoxes[i].slots, 0);
+        Queue_init(&mailBoxes[i].pros, 1);
+        Queue_init(&mailBoxes[i].cons, 1);
     }
 
     //Initialize the mailslots
@@ -110,12 +110,20 @@ void phase2_init(void){
 
     //Initialize the shadow processes
     for(int i = 0; i < MAXPROC; i++){
-        shadowProcs[i].pid = -1;
-        shadowProcs[i].msg_ptr = NULL;
-        shadowProcs[i].msg_size = -1;
-        shadowProcs[i].mailSlot = NULL;
-        shadowProcs[i].index = i;
-        shadowProcs[i].next = NULL;
+        //Consumers
+        conProcs[i].pid = -1;
+        conProcs[i].index = i;
+        conProcs[i].msg_ptr = NULL;
+        conProcs[i].msg_size = -1;
+        conProcs[i].mailSlot = NULL;
+        conProcs[i].next = NULL;
+        //Producers
+        proProcs[i].pid = -1;
+        proProcs[i].index = i;
+        proProcs[i].msg_ptr = NULL;
+        proProcs[i].msg_size = -1;
+        proProcs[i].mailSlot = NULL;
+        proProcs[i].next = NULL;
     }
 
     //Initialize the system call vector
@@ -156,16 +164,16 @@ int MboxCreate(int slots, int slot_size){
         return -1;
     }
     //Index IS the mailbox ID
-    if(nextMBoxID == MAXMBOX || mailboxes[nextMBoxID].status != EMPTY){
+    if(nextMBoxID == MAXMBOX || mailBoxes[nextMBoxID].status != EMPTY){
         nextMBoxID = findNextMBoxID();
         if(nextMBoxID == -1){
             return -1;
         }
     }
-    mailboxes[nextMBoxID].mboxID = nextMBoxID;
-    mailboxes[nextMBoxID].slotSize = slot_size;
-    mailboxes[nextMBoxID].numSlots = slots;
-    mailboxes[nextMBoxID].status = ACTIVE;
+    mailBoxes[nextMBoxID].mboxID = nextMBoxID;
+    mailBoxes[nextMBoxID].slotSize = slot_size;
+    mailBoxes[nextMBoxID].totalSlots = slots;
+    mailBoxes[nextMBoxID].status = ACTIVE;
 
     nextMBoxID++;
      
@@ -174,7 +182,7 @@ int MboxCreate(int slots, int slot_size){
 
 int findNextMBoxID(){
     for(int i = 7; i < MAXMBOX; i++){
-        if(mailboxes[i].status == EMPTY){
+        if(mailBoxes[i].status == EMPTY){
              
             return i;
         }
@@ -184,7 +192,7 @@ int findNextMBoxID(){
 }
 
 int createMailSlot(int mboxID, char * message, int messageSize){
-    if(mailboxes[mboxID].currentNumOfSlots == mailboxes[mboxID].numSlots){
+    if(mailBoxes[mboxID].currentNumOfSlots == mailBoxes[mboxID].totalSlots){
         return -1;
     }
     if(nextSlotID == MAXSLOTS || mailSlots[nextSlotID].status != EMPTY){
@@ -215,31 +223,32 @@ int findNextSlotID(){
     return -1;
 }
 
-int createShadowProc(int pid, void **msg_ptr, int msg_size){
-    if(pid < 0 || pid >= MAXPROC){
-        return -1;
-    }
-    if(shadowProcs[nextProcID].pid != -1){
-        nextProcID = findNextProcID();
-        if(nextProcID == -1){
-            return -1;
-        }
-    }
-    shadowProcs[nextProcID].pid = pid;
-    shadowProcs[nextProcID].msg_ptr = msg_ptr;
-    shadowProcs[nextProcID].msg_size = msg_size;
-    shadowProcs[nextProcID].next = NULL;
-    nextProcID++;
-    return nextProcID - 1;
-}
+int createShadowProc(int pid, void **msg_ptr, int msg_size, int whichProc){
+    //Producers
+    if(whichProc == 1){
 
-int findNextProcID(){
-    for(int i = 0; i < MAXPROC; i++){
-        if(shadowProcs[i].pid == -1){
-            return i;
+        int index = pid % MAXPROC;
+        if(proProcs[index].pid != -1){
+            return -1; //Already exists
         }
+        proProcs[index].pid = pid;
+        proProcs[index].msg_ptr = msg_ptr;
+        proProcs[index].msg_size = msg_size;
+        proProcs[index].mailSlot = NULL;
+        return index;
     }
-    return -1;
+    //Consumers
+    else{
+        int index = pid % MAXPROC;
+        if(conProcs[index].pid != -1){
+            return -1; //Already exists
+        }
+        conProcs[index].pid = pid;
+        conProcs[index].msg_ptr = msg_ptr;
+        conProcs[index].msg_size = msg_size;
+        conProcs[index].mailSlot = NULL;
+        return index;
+    } //Success
 }
 
 int MboxRelease(int mbox_id){
@@ -249,60 +258,54 @@ int MboxRelease(int mbox_id){
 
 int SendHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
     //IS mailbox release?
-    if(mailboxes[mbox_id].status == RELEASE){
+    if(mailBoxes[mbox_id].status == RELEASE){
         return RELEASE;
     }
     //Error checking
-    if(mbox_id < 0 || mbox_id >= MAXMBOX || mailboxes[mbox_id].status != ACTIVE){
+    if(mbox_id < 0 || mbox_id >= MAXMBOX || mailBoxes[mbox_id].status == INACTIVE){
         return -1;
     }
-    if(msg_size < 0 || msg_size > MAX_MESSAGE){
+    if(msg_size < 0 || msg_size > MAX_MESSAGE || msg_size > mailBoxes[mbox_id].slotSize){
         return -1;
     }
     if(msg_size > 0 && msg_ptr == NULL){
         return -1;
     }
+    if(nextSlotID == MAXSLOTS){
+        return -2;
+    }
     //IF we have a reciver that is waiting, We can send the message
     //Else we need to block the sender
     //What if The proccess is the sender and the reciver? We can not block it per say
-    if(mailboxes[mbox_id].recievers.size > 0){
-        ShadowProc * shadowProc = Queue_pop(&(mailboxes[mbox_id].recievers));
-        //USLOSS_Console("SendHelper(): messageSize = %d,  Message: %s\n", msg_size, msg_ptr);
-        strncpy(shadowProc->mailSlot->message, msg_ptr, msg_size);
-        // USLOSS_Console("SendHelper(): messageSize = %d,  Message: %s\n", shadowProc->mailSlot->messageSize, shadowProc->mailSlot->message);
-        shadowProc->mailSlot->messageSize = msg_size;
-        shadowProc->msg_ptr = msg_ptr;
-        shadowProc->msg_size = msg_size;
+    if(mailBoxes[mbox_id].cons.size > 0){
+        ShadowProc * consumerProc = Queue_pop(&mailBoxes[mbox_id].cons);
+        // MailSlot * mailSlot = Queue_pop(&mailBoxes[mbox_id].slots);
+        // consumerProc->mailSlot = mailSlot;
+        memcpy(consumerProc->msg_ptr, msg_ptr, msg_size);
+        consumerProc->msg_size = msg_size;
+        // mailBoxes[mbox_id].currentNumOfSlots--;
+        unblockProc(consumerProc->pid);
+        return 0;
+    }
+    if(mailBoxes[mbox_id].currentNumOfSlots == mailBoxes[mbox_id].totalSlots){
+        if(!canBlock){
+            return -2;
+        }
 
-        mailboxes[mbox_id].currentNumOfSlots--;
-        // USLOSS_Console("SendHelper(): Current Mail Slots: %d\n", mailboxes[mbox_id].currentNumOfSlots);
-        unblockProc(shadowProc->pid);
+        int result = createShadowProc(getpid(), msg_ptr, msg_size, 1);
+        Queue_push(&mailBoxes[mbox_id].pros, &proProcs[result]);
+        blockMe(MAILBLOCK);
+
+        if(isZapped()){
+            return -3;
+        }
+
         return 0;
     }
-    else{
-        int mailSlotID = createMailSlot(mbox_id, msg_ptr, msg_size);
-        while(mailSlotID == -1){
-            // USLOSS_Console("SendHelper(): Could not create mail slot\n");
-            if(!canBlock){
-                return -2;
-            }
-            blockMe(MAILBLOCK);
-            mailSlotID = createMailSlot(mbox_id, msg_ptr, msg_size);  
-        }
-        mailboxes[mbox_id].currentNumOfSlots++;
-        MailSlot * mailSlot = &mailSlots[mailSlotID];
-        int shadowProcID = createShadowProc(getpid(), msg_ptr, msg_size);
-        if(shadowProcID == -1){
-            return -1;
-        }
-        ShadowProc * shadowProc = &shadowProcs[shadowProcID];
-        shadowProc->mailSlot = mailSlot;
-        // strncpy(shadowProc->mailSlot->message, msg_ptr, msg_size);
-        shadowProc->msg_ptr = msg_ptr;
-        shadowProc->msg_size = msg_size;
-        Queue_push(&(mailboxes[mbox_id].senders), shadowProc);
-        return 0;
-    }
+
+    int mailSlotID = createMailSlot(mbox_id, msg_ptr, msg_size);
+    Queue_push(&mailBoxes[mbox_id].slots, &mailSlots[mailSlotID]);
+    return 0;
 }
 
 
@@ -317,11 +320,11 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size){
 
 int RecvHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
     //IS mailbox release?
-    if(mailboxes[mbox_id].status == RELEASE){
+    if(mailBoxes[mbox_id].status == RELEASE){
         return RELEASE;
     }
     //ERROR CHECKING
-    if(mbox_id < 0 || mbox_id >= MAXMBOX || mailboxes[mbox_id].status != ACTIVE){
+    if(mbox_id < 0 || mbox_id >= MAXMBOX || mailBoxes[mbox_id].status == INACTIVE){
         return -1;
     }
     if(msg_size < 0 || msg_size > MAX_MESSAGE){
@@ -333,51 +336,72 @@ int RecvHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
     //IF we have a message waiting, we can recieve it
     //Else we need to block the reciver until a message is sent
     //NOte we have 0 slot mail boxes and 0 length messages
-    if(mailboxes[mbox_id].senders.size > 0){
-        ShadowProc * shadowProc = Queue_pop(&(mailboxes[mbox_id].senders));
-        // MailSlot * mailSlot = Queue_pop(&(mailboxes[mbox_id].slots));
-        strncpy(msg_ptr, shadowProc->mailSlot->message, shadowProc->mailSlot->messageSize);
-        shadowProc->mailSlot->status = EMPTY;
-        int temp_size = shadowProc->mailSlot->messageSize;
-        shadowProc->mailSlot->messageSize = -1;
-        shadowProc->mailSlot->message[0] = '\0';
-        shadowProc->msg_ptr = NULL;
-        shadowProc->msg_size = -1;
-
-        mailboxes[mbox_id].currentNumOfSlots--;
-        // USLOSS_Console("RECVHelper(): Current Mail slots %d\n", mailboxes[mbox_id].currentNumOfSlots);
-        unblockProc(shadowProc->pid);
-        shadowProc->pid = -1;
-        //Queue_push(&(mailboxes[mbox_id].recievers), shadowProc);
-        return temp_size;
-    }
-    else{
-        int shadowProcID = createShadowProc(getpid(), &msg_ptr, msg_size);
-        if(shadowProcID == -1){
-            USLOSS_Console("RecvHelper(): Could not create shadow process\n");
-            return -1;
-        }
-        ShadowProc * shadowProc = &shadowProcs[shadowProcID];
-        int mailSlotID = createMailSlot(mbox_id, msg_ptr, msg_size);
-        while(mailSlotID == -1){
-            USLOSS_Console("RecvHelper(): Could not create mail slot\n");
-            if(!canBlock){
-                return -2;
-            }
+    
+    //0 slot mailboxes
+    if(mailBoxes[mbox_id].totalSlots == 0){
+         int index = createShadowProc(getpid(), msg_ptr, msg_size, 0);
+         
+         if(mailBoxes[mbox_id].pros.size > 0){
+            ShadowProc * producer = Queue_pop(&mailBoxes[mbox_id].pros);
+            memcpy(conProcs[index].msg_ptr, producer->msg_ptr, producer->msg_size);
+            conProcs[index].msg_size = producer->msg_size;
+            unblockProc(producer->pid);
+         }
+         else if (canBlock == CANBLOCK){
+            Queue_push(&mailBoxes[mbox_id].cons, &conProcs[index]);
             blockMe(MAILBLOCK);
-            mailSlotID = createMailSlot(mbox_id, msg_ptr, msg_size);
+
+            if(isZapped()){
+                return -3;
+            }
+         }
+         
+         return conProcs[index].msg_size;
+    }
+    MailSlot * mailSlot;
+    if(mailBoxes[mbox_id].slots.size == 0){
+        int index = createShadowProc(getpid(), msg_ptr, msg_size, 0);
+
+        if(mailBoxes[mbox_id].totalSlots == 0 && mailBoxes[mbox_id].pros.size > 0){
+            ShadowProc * producer = Queue_pop(&mailBoxes[mbox_id].pros);
+            memcpy(conProcs[index].msg_ptr, producer->msg_ptr, producer->msg_size);
+            conProcs[index].msg_size = producer->msg_size;
+            unblockProc(producer->pid);
+            return conProcs[index].msg_size;
         }
-        mailboxes[mbox_id].currentNumOfSlots++;
-        shadowProc->mailSlot = &mailSlots[mailSlotID];
-        Queue_push(&(mailboxes[mbox_id].recievers), &shadowProcs[shadowProcID]);
-        if(!canBlock){
+        if (!canBlock){
             return -2;
         }
+
+        Queue_push(&mailBoxes[mbox_id].cons, &conProcs[index]);
         blockMe(MAILBLOCK);
-        strncpy(msg_ptr, shadowProc->mailSlot->message, shadowProc->mailSlot->messageSize);
-        return shadowProc->mailSlot->messageSize;
+
+        if(isZapped()){
+            return -3;
+        }
+
+        return conProcs[index].msg_size;
+    }
+    else{
+        mailSlot = Queue_pop(&mailBoxes[mbox_id].slots);
+    }
+    if(mailSlot == 0 || mailSlot->status == EMPTY || msg_size < mailSlot->messageSize){
+        return -1;
     }
 
+    int size = mailSlot->messageSize;
+    memcpy(msg_ptr, mailSlot->message, size);
+    cleanSlot(mailSlot->mboxID);
+
+    if(mailBoxes[mbox_id].pros.size > 0){
+        ShadowProc * producer = Queue_pop(&mailBoxes[mbox_id].pros);
+
+        int i = createMailSlot(mbox_id, producer->msg_ptr, producer->msg_size);
+        Queue_push(&mailBoxes[mbox_id].slots, &mailSlots[i]);
+        unblockProc(producer->pid);
+    }
+
+    return size;
 }
 
 
@@ -501,16 +525,16 @@ void phase2_clockHandler(void){
 
 
 //---------------------------Mr Clean---------------------------//
-void cleanProc(int index){
-    shadowProcs[index].pid = -1;
-    shadowProcs[index].msg_ptr = NULL;
-    shadowProcs[index].msg_size = -1;
-    shadowProcs[index].mailSlot = NULL;
-    shadowProcs[index].next = NULL;
-}
+// void cleanProc(int index){
+//     shadowProcs[index].pid = -1;
+//     shadowProcs[index].msg_ptr = NULL;
+//     shadowProcs[index].msg_size = -1;
+//     shadowProcs[index].mailSlot = NULL;
+//     shadowProcs[index].next = NULL;
+// }
 
 void cleanSlot(int index){
-    mailboxes[mailSlots[index].mboxID].currentNumOfSlots--;
+    mailBoxes[mailSlots[index].mboxID].currentNumOfSlots--;
     mailSlots[index].mboxID = -1;
     mailSlots[index].status = EMPTY;
     mailSlots[index].messageSize = -1;

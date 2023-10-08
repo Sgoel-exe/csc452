@@ -62,5 +62,6 @@
   ],
   "files.associations": {
     "system_error": "c"
-  }
+  },
+  "C_Cpp_Runner.msvcSecureNoWarnings": false
 }
