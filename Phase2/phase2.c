@@ -15,6 +15,9 @@
 #define MAILBLOCK 12
 #define CANBLOCK 1
 #define CANTBLOCK 0
+#define CLOCK 0
+#define DISK 1
+#define TERM 3
 typedef struct MailBox MailBox;
 typedef struct MailSlot MailSlot;
 typedef struct ShadowProc ShadowProc;
@@ -82,6 +85,7 @@ ShadowProc conProcs[MAXPROC];
 ShadowProc proProcs[MAXPROC];
 int nextMBoxID = 0;  //Next available mailbox ID
 int nextSlotID = 0;  //Next available slot ID
+int io = 0;
 
 void (*systemCallVec[MAXSYSCALLS])(USLOSS_Sysargs *args);
 
@@ -145,7 +149,7 @@ void phase2_init(void){
 
 
 void nullsys(USLOSS_Sysargs *args){
-    USLOSS_Console("nullsys(): Invalid syscall %d. Halting...\n", args->number);
+    USLOSS_Console("nullsys(): Program called an unimplemented syscall.  syscall no: %d   PSR: 0x%.2x\n", args->number, USLOSS_PsrGet());
     USLOSS_Halt(1);
 }
 
@@ -153,10 +157,6 @@ void phase2_start_service_processes(void){
     // phase3_start_service_processes();
     // phase4_start_service_processes();
     // phase5_start_service_processes();
-}
-
-int phase2_check_io(void){
-    return 0;
 }
 
 int MboxCreate(int slots, int slot_size){
@@ -252,7 +252,34 @@ int createShadowProc(int pid, void **msg_ptr, int msg_size, int whichProc){
 }
 
 int MboxRelease(int mbox_id){
+    //Error checking
+    if(mbox_id < 0 || mbox_id >= MAXMBOX || mailBoxes[mbox_id].status == INACTIVE){
+        return -1;
+    }
+    //Release the mailbox
+    while (mailBoxes[mbox_id].slots.size > 0)
+    {
+        MailSlot * mailSlot = Queue_pop(&mailBoxes[mbox_id].slots);
+        mailBoxes[mbox_id].currentNumOfSlots--;
+        cleanSlot(mailSlot->mboxID);
+    }
+    mailBoxes[mbox_id].status = RELEASE;
+    //Release the processes
+    while (mailBoxes[mbox_id].pros.size > 0)
+    {
+        ShadowProc * producerProc = Queue_pop(&mailBoxes[mbox_id].pros);
+        unblockProc(producerProc->pid);
+        cleanProc(producerProc->index, 1);
+    }
+    while (mailBoxes[mbox_id].cons.size > 0)
+    {
+        ShadowProc * consumerProc = Queue_pop(&mailBoxes[mbox_id].cons);
+        unblockProc(consumerProc->pid);
+        cleanProc(consumerProc->index, 0);
+    }
+    cleanMail(mbox_id);
     return 0;
+    
 }
 
 
@@ -288,7 +315,7 @@ int SendHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
         return 0;
     }
     if(mailBoxes[mbox_id].currentNumOfSlots == mailBoxes[mbox_id].totalSlots){
-        if(!canBlock){
+        if(canBlock == CANTBLOCK){
             return -2;
         }
 
@@ -304,6 +331,7 @@ int SendHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
     }
 
     int mailSlotID = createMailSlot(mbox_id, msg_ptr, msg_size);
+    mailBoxes[mbox_id].currentNumOfSlots++;
     Queue_push(&mailBoxes[mbox_id].slots, &mailSlots[mailSlotID]);
     return 0;
 }
@@ -369,7 +397,7 @@ int RecvHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
             unblockProc(producer->pid);
             return conProcs[index].msg_size;
         }
-        if (!canBlock){
+        if (canBlock == CANTBLOCK){
             return -2;
         }
 
@@ -384,6 +412,7 @@ int RecvHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
     }
     else{
         mailSlot = Queue_pop(&mailBoxes[mbox_id].slots);
+        mailBoxes[mbox_id].currentNumOfSlots--;
     }
     if(mailSlot == 0 || mailSlot->status == EMPTY || msg_size < mailSlot->messageSize){
         return -1;
@@ -397,6 +426,7 @@ int RecvHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
         ShadowProc * producer = Queue_pop(&mailBoxes[mbox_id].pros);
 
         int i = createMailSlot(mbox_id, producer->msg_ptr, producer->msg_size);
+        mailBoxes[mbox_id].currentNumOfSlots++;
         Queue_push(&mailBoxes[mbox_id].slots, &mailSlots[i]);
         unblockProc(producer->pid);
     }
@@ -413,9 +443,6 @@ int MboxCondRecv(int mbox_id, void *msg_ptr, int msg_size){
     return RecvHelper(mbox_id, msg_ptr, msg_size, CANTBLOCK);
 }
 
-void waitDevice(int type, int unit, int *status){
-
-}
 
 void enableInterrupts(void){
     int result = USLOSS_PsrSet(USLOSS_PsrGet() | USLOSS_PSR_CURRENT_INT);
@@ -501,37 +528,120 @@ void * Queue_front(Queue * queue){
 
 
 //---------------------------HANDLERS---------------------------//
+void waitDevice(int type, int unit, int *status){
+    int res;
+
+    if(type == USLOSS_CLOCK_DEV){
+        res = CLOCK;
+        if(unit != 0){
+            USLOSS_Console("waitDevice(): Invalid unit %d for clock device. Halting...\n", unit);
+            USLOSS_Halt(1);
+        }
+    }
+    else if(type == USLOSS_DISK_DEV){
+        res = DISK;
+        if(unit < 0 || unit >= 2){
+            USLOSS_Console("waitDevice(): Invalid unit %d for disk device. Halting...\n", unit);
+            USLOSS_Halt(1);
+        }
+    }
+    else if(type == USLOSS_TERM_DEV){
+        res = TERM;
+        if(unit < 0 || unit >= 4){
+            USLOSS_Console("waitDevice(): Invalid unit %d for terminal device. Halting...\n", unit);
+            USLOSS_Halt(1);
+        }
+    }
+    else{
+        USLOSS_Console("waitDevice(): Invalid type %d. Halting...\n", type);
+        USLOSS_Halt(1);
+    }
+
+    io++;
+    MboxRecv(res+unit, status, 0);
+    io--;
+
+    return isZapped() ? -1 : 0;
+}
 void diskHandler(int dev, void *arg){
-    USLOSS_Console("diskHandler(): called\n");
+    // USLOSS_Console("diskHandler(): called\n");
+    if(dev != USLOSS_DISK_DEV){
+        USLOSS_Console("diskHandler(): called with invalid device %d.\n", dev);
+        return;
+    }
+    long unit = (long) arg;
+    int status;
+    int valid = USLOSS_DeviceInput(dev, unit, &status);
+    if(valid == USLOSS_DEV_INVALID){
+        USLOSS_Console("diskHandler(): Invalid input from device %d, unit %d.\n", dev, unit);
+        USLOSS_Halt(1);
+    }
+
+    MboxCondSend(DISK+unit, &status, sizeof(int));
 }
 
 void termHandler(int dev, void *arg){
-    USLOSS_Console("termHandler(): called\n");
+    // USLOSS_Console("termHandler(): called\n");
+    if(dev != USLOSS_TERM_DEV){
+        USLOSS_Console("termHandler(): called with invalid device %d.\n", dev);
+        return;
+    }
+
+    long unit = (long) arg;
+    int status;
+    int valid = USLOSS_DeviceInput(dev, unit, &status);
+    if(valid == USLOSS_DEV_INVALID){
+        USLOSS_Console("diskHandler(): Invalid input from device %d, unit %d. Halting...\n", dev, unit);
+        USLOSS_Halt(1);
+    }
+
+    MboxCondSend(TERM+unit, &status, sizeof(int));
 }
 
 void syscallHandler(int dev, void *arg){
     //USLOSS_Console("syscallHandler(): called\n");
+    if(dev != USLOSS_SYSCALL_INT){
+        USLOSS_Console("syscallHandler(): called with invalid interrupt %d.\n", dev);
+        return;
+    }
     USLOSS_Sysargs *args = (USLOSS_Sysargs *) arg;
     if(args->number < 0 || args->number >= MAXSYSCALLS){
-        USLOSS_Console("syscallHandler(): Invalid syscall %d. Halting...\n", args->number);
+        USLOSS_Console("syscallHandler(): Invalid syscall number %d\n", args->number);
         USLOSS_Halt(1);
     }
     systemCallVec[args->number](args);
 }
 
 void phase2_clockHandler(void){
+    if(readCurStartTime() - currentTime() >= 100000){
+        timeSlice();
+    }
+}
 
+int phase2_check_io(void){
+    return io;
 }
 
 
 //---------------------------Mr Clean---------------------------//
-// void cleanProc(int index){
-//     shadowProcs[index].pid = -1;
-//     shadowProcs[index].msg_ptr = NULL;
-//     shadowProcs[index].msg_size = -1;
-//     shadowProcs[index].mailSlot = NULL;
-//     shadowProcs[index].next = NULL;
-// }
+void cleanProc(int index, int whichProc){
+    if(whichProc){
+        proProcs[index].pid = -1;
+        proProcs[index].index = index;
+        proProcs[index].msg_ptr = NULL;
+        proProcs[index].msg_size = -1;
+        proProcs[index].mailSlot = NULL;
+        proProcs[index].next = NULL;
+    }
+    else{
+        conProcs[index].pid = -1;
+        conProcs[index].index = index;
+        conProcs[index].msg_ptr = NULL;
+        conProcs[index].msg_size = -1;
+        conProcs[index].mailSlot = NULL;
+        conProcs[index].next = NULL;
+    }
+}
 
 void cleanSlot(int index){
     mailBoxes[mailSlots[index].mboxID].currentNumOfSlots--;
@@ -540,4 +650,15 @@ void cleanSlot(int index){
     mailSlots[index].messageSize = -1;
     mailSlots[index].message[0] = '\0';
     mailSlots[index].next = NULL;
+}
+
+void cleanMail(int index){
+    mailBoxes[index].mboxID = -1;
+    mailBoxes[index].slotSize = -1;
+    mailBoxes[index].totalSlots = -1;
+    mailBoxes[index].currentNumOfSlots = 0;
+    mailBoxes[index].status = EMPTY;
+    Queue_init(&mailBoxes[index].slots, 0);
+    Queue_init(&mailBoxes[index].pros, 1);
+    Queue_init(&mailBoxes[index].cons, 1);
 }
