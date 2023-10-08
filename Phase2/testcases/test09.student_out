@@ -22,5 +22,13 @@ XXp4(): started and quitting
 XXp3(): started
 XXp3(): MboxRelease returned 0
 start2(): joined with kid 10, status = 5
-DEADLOCK DETECTED!  All of the processes have blocked, but I/O is not ongoing.
+XXp2a(): after send of message 'hello from XXp2a', result = -3
+XXp2a(): mailbox destroyed by MboxSend() call
+start2(): joined with kid 6, status = 4
+XXp2b(): after send of message 'hello from XXp2b', result = -3
+XXp2b(): mailbox destroyed by MboxSend() call
+start2(): joined with kid 7, status = 4
+XXp2c(): after send of message 'hello from XXp2c', result = -3
+XXp2c(): mailbox destroyed by MboxSend() call
+start2(): joined with kid 8, status = 4
 finish(): The simulation is now terminating.

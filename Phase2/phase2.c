@@ -265,17 +265,17 @@ int MboxRelease(int mbox_id){
     }
     mailBoxes[mbox_id].status = RELEASE;
     //Release the processes
-    while (mailBoxes[mbox_id].pros.size > 0)
-    {
-        ShadowProc * producerProc = Queue_pop(&mailBoxes[mbox_id].pros);
-        unblockProc(producerProc->pid);
-        cleanProc(producerProc->index, 1);
-    }
     while (mailBoxes[mbox_id].cons.size > 0)
     {
         ShadowProc * consumerProc = Queue_pop(&mailBoxes[mbox_id].cons);
         unblockProc(consumerProc->pid);
         cleanProc(consumerProc->index, 0);
+    }
+    while (mailBoxes[mbox_id].pros.size > 0)
+    {
+        ShadowProc * producerProc = Queue_pop(&mailBoxes[mbox_id].pros);
+        unblockProc(producerProc->pid);
+        cleanProc(producerProc->index, 1);
     }
     cleanMail(mbox_id);
     return 0;
@@ -285,9 +285,9 @@ int MboxRelease(int mbox_id){
 
 int SendHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
     //IS mailbox release?
-    if(mailBoxes[mbox_id].status == RELEASE){
-        return RELEASE;
-    }
+    // if(mailBoxes[mbox_id].status == RELEASE){
+    //     return RELEASE;
+    // }
     //Error checking
     if(mbox_id < 0 || mbox_id >= MAXMBOX || mailBoxes[mbox_id].status == INACTIVE){
         return -1;
@@ -304,7 +304,7 @@ int SendHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
     //IF we have a reciver that is waiting, We can send the message
     //Else we need to block the sender
     //What if The proccess is the sender and the reciver? We can not block it per say
-    if(mailBoxes[mbox_id].cons.size > 0){
+    if(mailBoxes[mbox_id].cons.size > 0 && (mailBoxes[mbox_id].totalSlots == 0 || mailBoxes[mbox_id].currentNumOfSlots < mailBoxes[mbox_id].totalSlots)){
         ShadowProc * consumerProc = Queue_pop(&mailBoxes[mbox_id].cons);
         // MailSlot * mailSlot = Queue_pop(&mailBoxes[mbox_id].slots);
         // consumerProc->mailSlot = mailSlot;
@@ -323,7 +323,7 @@ int SendHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
         Queue_push(&mailBoxes[mbox_id].pros, &proProcs[result]);
         blockMe(MAILBLOCK);
 
-        if(isZapped()){
+        if(isZapped() || mailBoxes[mbox_id].status != ACTIVE){
             return -3;
         }
 
@@ -347,10 +347,10 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size){
 
 
 int RecvHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
-    //IS mailbox release?
-    if(mailBoxes[mbox_id].status == RELEASE){
-        return RELEASE;
-    }
+    // //IS mailbox release?
+    // if(mailBoxes[mbox_id].status == RELEASE){
+    //     return RELEASE;
+    // }
     //ERROR CHECKING
     if(mbox_id < 0 || mbox_id >= MAXMBOX || mailBoxes[mbox_id].status == INACTIVE){
         return -1;
@@ -379,7 +379,7 @@ int RecvHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
             Queue_push(&mailBoxes[mbox_id].cons, &conProcs[index]);
             blockMe(MAILBLOCK);
 
-            if(isZapped()){
+            if(isZapped() || mailBoxes[mbox_id].status != ACTIVE){
                 return -3;
             }
          }
@@ -398,13 +398,16 @@ int RecvHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
             return conProcs[index].msg_size;
         }
         if (canBlock == CANTBLOCK){
+            if(mailBoxes[mbox_id].status != ACTIVE){
+                return -1;
+            }
             return -2;
         }
 
         Queue_push(&mailBoxes[mbox_id].cons, &conProcs[index]);
         blockMe(MAILBLOCK);
 
-        if(isZapped()){
+        if(isZapped() || mailBoxes[mbox_id].status != ACTIVE){
             return -3;
         }
 
@@ -414,13 +417,14 @@ int RecvHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
         mailSlot = Queue_pop(&mailBoxes[mbox_id].slots);
         mailBoxes[mbox_id].currentNumOfSlots--;
     }
-    if(mailSlot == 0 || mailSlot->status == EMPTY || msg_size < mailSlot->messageSize){
+    if(mailSlot == NULL || mailSlot->status == EMPTY || msg_size < mailSlot->messageSize){
+        // USLOSS_Console("RecvHelper(): mailSlot Status: %d  msgsize & mailslot messafeSize %d :: %d\n",mailSlot->status ,msg_size, mailSlot->messageSize);
         return -1;
     }
 
     int size = mailSlot->messageSize;
     memcpy(msg_ptr, mailSlot->message, size);
-    cleanSlot(mailSlot->mboxID);
+    // cleanSlot(mailSlot->mboxID);
 
     if(mailBoxes[mbox_id].pros.size > 0){
         ShadowProc * producer = Queue_pop(&mailBoxes[mbox_id].pros);
@@ -496,7 +500,7 @@ void Queue_push(Queue * queue, void * item){
 
 void* Queue_pop(Queue * queue){
     if(queue->size == 0){
-        return;
+        return NULL;
     }
     if(queue->type == 0){
         MailSlot * mailSlot = (MailSlot *) queue->head;
