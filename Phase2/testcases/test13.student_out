@@ -1,0 +1,15 @@
+phase3_start_service_processes() called -- currently a NOP
+phase4_start_service_processes() called -- currently a NOP
+phase5_start_service_processes() called -- currently a NOP
+start2(): at beginning, pid = 4
+start2(): fork'd child 5
+XXp1(): started, calling waitDevice for clock
+waitDevice(): Before reciving msg
+clockHandler(): called
+waitDevice(): After reciving msg
+XXp1(): after waitDevice call
+XXp1(): About to print status from clock Handler:
+XXp1(): status = 90015   -- Should be near 100k, but does not have to be an exact match.  Is often 90k or so on Russ's computer.
+waitDevice(): Before reciving msg
+clockHandler(): sent message, 0
+clockHandler(): called

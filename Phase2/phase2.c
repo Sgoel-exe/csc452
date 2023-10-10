@@ -68,6 +68,7 @@ void phase2_clockHandler(void);
 void diskHandler(int dev, void *arg);
 void termHandler(int dev, void *arg);
 void syscallHandler(int dev, void *arg);
+void clockHandler(int dev, void *arg);
 void enableInterrupts(void);
 void disableInterrupts(void);
 void Queue_init(Queue * queue, int type);
@@ -77,7 +78,6 @@ void * Queue_front(Queue * queue);
 int findNextMBoxID();
 int findNextSlotID();
 int createMailSlot(int mboxID, char * message, int messageSize);
-
 //------Global Variables------//
 MailBox mailBoxes[MAXMBOX];
 MailSlot mailSlots[MAXSLOTS];
@@ -135,7 +135,7 @@ void phase2_init(void){
         systemCallVec[i] = nullsys;
     }
 
-    USLOSS_IntVec[USLOSS_CLOCK_INT] = phase2_clockHandler;
+    USLOSS_IntVec[USLOSS_CLOCK_INT] = clockHandler;
     USLOSS_IntVec[USLOSS_DISK_INT] = diskHandler;
     USLOSS_IntVec[USLOSS_TERM_INT] = termHandler;
     USLOSS_IntVec[USLOSS_SYSCALL_INT] = syscallHandler;
@@ -228,9 +228,9 @@ int createShadowProc(int pid, void **msg_ptr, int msg_size, int whichProc){
     if(whichProc == 1){
 
         int index = pid % MAXPROC;
-        if(proProcs[index].pid != -1){
-            return -1; //Already exists
-        }
+        // if(proProcs[index].pid != -1){
+        //     return -1; //Already exists
+        // }
         proProcs[index].pid = pid;
         proProcs[index].msg_ptr = msg_ptr;
         proProcs[index].msg_size = msg_size;
@@ -240,9 +240,9 @@ int createShadowProc(int pid, void **msg_ptr, int msg_size, int whichProc){
     //Consumers
     else{
         int index = pid % MAXPROC;
-        if(conProcs[index].pid != -1){
-            return -1; //Already exists
-        }
+        // if(conProcs[index].pid != -1){
+        //     return -1; //Already exists
+        // }
         conProcs[index].pid = pid;
         conProcs[index].msg_ptr = msg_ptr;
         conProcs[index].msg_size = msg_size;
@@ -312,6 +312,7 @@ int SendHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
         consumerProc->msg_size = msg_size;
         // mailBoxes[mbox_id].currentNumOfSlots--;
         unblockProc(consumerProc->pid);
+        // cleanProc(consumerProc->index, 0);
         return 0;
     }
     if(mailBoxes[mbox_id].currentNumOfSlots == mailBoxes[mbox_id].totalSlots){
@@ -370,10 +371,12 @@ int RecvHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
          int index = createShadowProc(getpid(), msg_ptr, msg_size, 0);
          
          if(mailBoxes[mbox_id].pros.size > 0){
+            // USLOSS_Console("RecvHelper(): mailBoxes[mbox_id].pros.size > 0\n");
             ShadowProc * producer = Queue_pop(&mailBoxes[mbox_id].pros);
             memcpy(conProcs[index].msg_ptr, producer->msg_ptr, producer->msg_size);
             conProcs[index].msg_size = producer->msg_size;
             unblockProc(producer->pid);
+            // cleanProc(producer->index, 1);
          }
          else if (canBlock == CANBLOCK){
             Queue_push(&mailBoxes[mbox_id].cons, &conProcs[index]);
@@ -395,6 +398,7 @@ int RecvHelper(int mbox_id, void *msg_ptr, int msg_size, int canBlock){
             memcpy(conProcs[index].msg_ptr, producer->msg_ptr, producer->msg_size);
             conProcs[index].msg_size = producer->msg_size;
             unblockProc(producer->pid);
+            // cleanProc(producer->index, 1);
             return conProcs[index].msg_size;
         }
         if (canBlock == CANTBLOCK){
@@ -616,9 +620,30 @@ void syscallHandler(int dev, void *arg){
     systemCallVec[args->number](args);
 }
 
+void clockHandler(int dev, void *arg){
+    //USLOSS_Console("clockHandler(): called\n");
+    if(dev != USLOSS_CLOCK_DEV){
+        USLOSS_Console("clockHandler(): called with invalid device %d.\n", dev);
+        return;
+    }
+    // if(status == USLOSS_DEV_INVALID){
+    //     USLOSS_Console("clockHandler(): Invalid input from device %d, unit %d. Halting...\n", dev, 0);
+    //     USLOSS_Halt(1);
+    // }
+    // phase2_clockHandler();
+    if(currentTime() - readCurStartTime() >= 90000){
+        // USLOSS_Console("clockHandler(): called\n");
+        int status; 
+        USLOSS_DeviceInput(dev, 0, &status);
+        int res = MboxCondSend(CLOCK, &status, sizeof(int));
+        // USLOSS_Console("clockHandler(): sent message, %d\n", res);
+    }
+    // timeSlice();
+}
+
 void phase2_clockHandler(void){
     if(readCurStartTime() - currentTime() >= 100000){
-        timeSlice();
+        USLOSS_Console("phase2_clockHandler(): called\n");
     }
 }
 
