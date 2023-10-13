@@ -43,7 +43,7 @@ int start2(char *arg)
         USLOSS_Console("start2(): got that message was too big. PASSED!\n");
     }
     else {
-        USLOSS_Console("start2(): FAILED!\n");
+        USLOSS_Console("start2(): FAILED! result = %d\n",  result);
         quit(0);
     }
 
