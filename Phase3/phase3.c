@@ -64,6 +64,12 @@ void nullsys(USLOSS_Sysargs *args);
 int spawn_K(USLOSS_Sysargs *args);
 int wait_K(USLOSS_Sysargs *args);
 void terminate_K(USLOSS_Sysargs *args);
+int sem_create_K(USLOSS_Sysargs *args);
+int semP_K(int semID);
+int semV_K(int semID);
+Process* Queue_pop(Queue *queue);
+Process* Queue_front(Queue *queue);
+void Queue_init(Queue *queue, int type);
 
 int spawn_T(char *args);
 
@@ -108,8 +114,9 @@ void phase3_init(){
     systemCallVec[SYS_SPAWN] = spawn_K;
     systemCallVec[SYS_WAIT] = wait_K;
     systemCallVec[SYS_TERMINATE] = terminate_K;
-
-
+    systemCallVec[SYS_SEMCREATE] = sem_create_K;
+    systemCallVec[SYS_SEMP] = semP_K;
+    systemCallVec[SYS_SEMV] = semV_K;
 }
 
 void phase3_start_service_processes(void){
@@ -125,6 +132,7 @@ void nullsys(USLOSS_Sysargs *args)
 
 int spawn_K(USLOSS_Sysargs *args){ //Add ERROR CHECKING and set arg4 accordingly.
     //SYS_SPAWN = args->number;
+    kernel_mode("spawn_K()");
     int (*func)(char*) = args->arg1;
     char *arg = args->arg2;
     int stack_size = (int)(long)args->arg3;
@@ -146,16 +154,16 @@ int spawn_K(USLOSS_Sysargs *args){ //Add ERROR CHECKING and set arg4 accordingly
     }
     childProc->startFunc = func;
     childProc->parent = &ProcTable[getpid() % MAXPROC];
-
-    MboxCondSend(childProc->mailBoxID, NULL, 0);
     args->arg1 = (void*)(long)pid;
-    change_to_user_mode();
+    MboxCondSend(childProc->mailBoxID, NULL, 0);
+    // change_to_user_mode();
     return pid;
     // USLOSS_Console("spawn_K(): Spawn called.  name: %s, func: 0x%x, arg: %s, stack_size: %d, priority: %d\n", name, func, arg, stack_size, priority);
 }
 
 int wait_K(USLOSS_Sysargs *args){
     //SYS_WAIT = args->number;
+    kernel_mode("wait_K()");
     int pid = (int)(long)args->arg1;
     int status = (int)(long)args->arg2;
     pid = join(&status);
@@ -177,20 +185,73 @@ int wait_K(USLOSS_Sysargs *args){
 void terminate_K(USLOSS_Sysargs *args){
     //SYS_TERMINATE = args->number;
     // USLOSS_Console("terminate_K(): called.  status = %d, pid = %d\n", (int)(long)args->arg1, getpid());
+    kernel_mode("terminate_K()");
     int status = (int)(long)args->arg1;
-    int pid = getpid();
-    if(ProcTable[pid % MAXPROC].childQueue.size > 0){
-        while(pid != -2){
-            pid = join(&status);
-        }
+    int joinRet = 0;
+    int currPid = getpid();
+    int temp;
+    while(ProcTable[currPid % MAXPROC].childQueue.size > 0){
+        Queue_pop(&ProcTable[currPid % MAXPROC].childQueue);
+        joinRet = join(&temp);
+        // USLOSS_Console("terminate_K(): Current pid: %d, joined with PID: %d", currPid,joinRet);
     }
+    // Process* parent = ProcTable[currPid % MAXPROC].parent;
+    // if(parent != NULL){
+    //     Queue_remove(&parent->childQueue, currPid);
+    // }
     quit(status);
     args->arg1 = (void*)(long)status;
     change_to_user_mode();
 }
 
+int sem_create_K(USLOSS_Sysargs *args){
+    kernel_mode("sem_create_K()");
+    if(totalSemUsed == MAXSEMS){
+        args->arg4 = (void*)(long)-1;
+        return -1;
+    }
+    int value = (int)(long)args->arg1;
+    if(value < 0){
+        args->arg4 = (void*)(long)-1;
+        return -1;
+    }
+    
+    int semID = sem_create(value);
+    if(semID == -1){
+        args->arg4 = (void*)(long)-1;
+        return -1;
+    }
+    args->arg1 = (void*)(long)semID;
+    args->arg4 = (void*)(long)0;
+    return 0;
+}
+
+int sem_create(int value){
+    for(int i = 0; i < MAXSEMS;i++){
+        if(SemTable[i].id == -1){
+            SemTable[i].id = i;
+            SemTable[i].value = value;
+            SemTable[i].startingValue = value;
+            SemTable[i].privMBoxID = MboxCreate(0, 0);
+            SemTable[i].mutexMBoxID = MboxCreate(1, 0);
+            totalSemUsed++;
+            return i;
+        }
+    }
+    return -1;
+}
+
+int semP_K(int semID){
+    return 0;
+}
+
+int semV_K(int semID){
+    return 0;
+}
+
 
 void process_init(int pid){
+    kernel_mode("process_init()");
     int i = pid % MAXPROC;
     ProcTable[i].pid = pid;
     ProcTable[i].status = 1;
@@ -206,6 +267,15 @@ void change_to_user_mode(){
     int result = USLOSS_PsrSet(USLOSS_PsrGet() & ~USLOSS_PSR_CURRENT_MODE);
     // assert(result == USLOSS_DEV_OK);
 }
+
+void kernel_mode(char *func){
+    if((USLOSS_PSR_CURRENT_MODE & USLOSS_PsrGet()) == 0){
+        USLOSS_Console("%s: called while in user mode, by process %d Halting...\n", func, getpid());
+        USLOSS_Halt(1);
+    }
+}
+
+
 
 //---------------------------Trampoline Functions---------------------------//
 int spawn_T(char *args){
@@ -271,13 +341,16 @@ void Queue_push(Queue *queue, Process *item)
  * 
 */
 
-Process *Queue_pop(Queue *queue)
+Process* Queue_pop(Queue *queue)
 {
+    if(queue == NULL){
+        return NULL;
+    }
     if (queue->size == 0)
     {
         return NULL;
     }
-    Process *temp = queue->head;
+    Process * temp = queue->head;
     queue->head = queue->head->nextSibling;
     queue->size--;
     return temp;
@@ -290,11 +363,33 @@ Process *Queue_pop(Queue *queue)
  * 
 */
 
-Process *Queue_front(Queue *queue)
+Process* Queue_front(Queue *queue)
 {
     if (queue->size == 0)
     {
         return NULL;
     }
     return queue->head;
+}
+
+Queue_remove(Queue *queue, int pid){
+    if(queue->size == 0){
+        return;
+    }
+    Process *curr = queue->head;
+    Process *prev = NULL;
+    while(curr != NULL){
+        if(curr->pid == pid){
+            if(prev == NULL){
+                queue->head = curr->nextSibling;
+            }
+            else{
+                prev->nextSibling = curr->nextSibling;
+            }
+            queue->size--;
+            return;
+        }
+        prev = curr;
+        curr = curr->nextSibling;
+    }
 }

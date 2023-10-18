@@ -1,5 +1,6 @@
 phase4_start_service_processes() called -- currently a NOP
 phase5_start_service_processes() called -- currently a NOP
 start3(): started.  Calling SemCreate
-nullsys(): Program called an unimplemented syscall.  syscall no: 16   PSR: 0x09
+start3(): sem_result = 0, semaphore = 0
+start3(): sem_result = 0, semaphore = 1
 finish(): The simulation is now terminating.

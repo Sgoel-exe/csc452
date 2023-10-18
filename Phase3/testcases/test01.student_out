@@ -5,5 +5,4 @@ Child1(): starting
 Child1(): done
 start3(): after spawn of 5
 start3(): Parent done. Calling Terminate.
-ERROR: testcase_main() returned nonzero: status=9
 finish(): The simulation is now terminating.
