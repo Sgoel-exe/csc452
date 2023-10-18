@@ -1,10 +1,9 @@
 phase4_start_service_processes() called -- currently a NOP
 phase5_start_service_processes() called -- currently a NOP
 start3(): started.  Calling Spawn for Child1
-spawn_K(): Spawn called.  name: Child1, func: 0x5d06d190, arg: (null), stack_size: 81920, priority: 5
-start3(): fork 1
-wait_K(): Wait called.  pid: 0, status: 0x0
-start3(): result of wait, pid = 1, status = 0
+start3(): fork 5
+Child1(): starting
+Child1(): done
+start3(): result of wait, pid = 5, status = 9
 start3(): Parent done. Calling Terminate.
-terminate_K(): Terminate called.  status: 0
-test00: phase3_usermode.c:77: Terminate: Assertion `0' failed.
+finish(): The simulation is now terminating.
