@@ -146,7 +146,6 @@ void spawn_K(USLOSS_Sysargs *args){ //Add ERROR CHECKING and set arg4 accordingl
     int priority= (int)(long)args->arg4;
     char *name = args->arg5;
     int pid = fork1(name, spawn_T, arg, stack_size, priority);
-
     if(pid == -1){
         args->arg1 = (void*)(long)-1;
         // terminate_K(args);
@@ -161,9 +160,11 @@ void spawn_K(USLOSS_Sysargs *args){ //Add ERROR CHECKING and set arg4 accordingl
         //MboxSend(childProc->mailBoxID, NULL, 0);
     }
     childProc->startFunc = func;
+    childProc->args = arg;
     childProc->parent = &ProcTable[getpid() % MAXPROC];
     args->arg1 = (void*)(long)pid;
     MboxCondSend(childProc->mailBoxID, NULL, 0);
+    
     // change_to_user_mode();
     // terminate_K(args);
     // USLOSS_Console("spawn_K(): Spawn called.  name: %s, func: 0x%x, arg: %s, stack_size: %d, priority: %d\n", name, func, arg, stack_size, priority);
@@ -319,19 +320,20 @@ void semV_K(USLOSS_Sysargs *args){
 
 void get_time_of_day_K(USLOSS_Sysargs *args){
     kernel_mode("get_time_of_day_K()");
-    *((int *)args->arg1) = currentTime();
+    args->arg1 = (void *)(long)currentTime();
     // change_to_user_mode();
 }
 
 void cpu_time_K(USLOSS_Sysargs *args){
     kernel_mode("cpu_time_K()");
-    *((int *)args->arg1) = readtime();
+    args->arg1 = (void *)(long)readtime();
     // change_to_user_mode();
 }
 
 void getPID_K(USLOSS_Sysargs *args){
     kernel_mode("getPID_K()");
-    *((int *)args->arg1) = getpid();
+    args->arg1 = (void *)(long)getpid();
+    // USLOSS_Console("getPID_K(): called.  pid = %d\n", getpid());
     // change_to_user_mode();
 }
 
