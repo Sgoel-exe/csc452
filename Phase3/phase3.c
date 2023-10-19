@@ -61,12 +61,15 @@ struct Semaphore{
 
 //-------------------Function Prototypes-------------------//
 void nullsys(USLOSS_Sysargs *args);
-int spawn_K(USLOSS_Sysargs *args);
-int wait_K(USLOSS_Sysargs *args);
+void spawn_K(USLOSS_Sysargs *args);
+void wait_K(USLOSS_Sysargs *args);
 void terminate_K(USLOSS_Sysargs *args);
-int sem_create_K(USLOSS_Sysargs *args);
-int semP_K(int semID);
-int semV_K(int semID);
+void sem_create_K(USLOSS_Sysargs *args);
+void semP_K(USLOSS_Sysargs *args);
+void semV_K(USLOSS_Sysargs *args);
+void get_time_of_day_K(USLOSS_Sysargs *args);
+void cpu_time_K(USLOSS_Sysargs *args);
+void getPID_K(USLOSS_Sysargs *args);
 Process* Queue_pop(Queue *queue);
 Process* Queue_front(Queue *queue);
 void Queue_init(Queue *queue, int type);
@@ -117,6 +120,10 @@ void phase3_init(){
     systemCallVec[SYS_SEMCREATE] = sem_create_K;
     systemCallVec[SYS_SEMP] = semP_K;
     systemCallVec[SYS_SEMV] = semV_K;
+    systemCallVec[SYS_GETTIMEOFDAY] = get_time_of_day_K;
+    systemCallVec[SYS_GETPROCINFO] = cpu_time_K;
+    systemCallVec[SYS_GETPID] = getPID_K;
+
 }
 
 void phase3_start_service_processes(void){
@@ -130,7 +137,7 @@ void nullsys(USLOSS_Sysargs *args)
     terminate_K(args);
 }
 
-int spawn_K(USLOSS_Sysargs *args){ //Add ERROR CHECKING and set arg4 accordingly.
+void spawn_K(USLOSS_Sysargs *args){ //Add ERROR CHECKING and set arg4 accordingly.
     //SYS_SPAWN = args->number;
     kernel_mode("spawn_K()");
     int (*func)(char*) = args->arg1;
@@ -142,7 +149,8 @@ int spawn_K(USLOSS_Sysargs *args){ //Add ERROR CHECKING and set arg4 accordingly
 
     if(pid == -1){
         args->arg1 = (void*)(long)-1;
-        return -1;
+        // terminate_K(args);
+        return ;
     }
 
     Process *childProc = &ProcTable[pid % MAXPROC];
@@ -157,11 +165,11 @@ int spawn_K(USLOSS_Sysargs *args){ //Add ERROR CHECKING and set arg4 accordingly
     args->arg1 = (void*)(long)pid;
     MboxCondSend(childProc->mailBoxID, NULL, 0);
     // change_to_user_mode();
-    return pid;
+    // terminate_K(args);
     // USLOSS_Console("spawn_K(): Spawn called.  name: %s, func: 0x%x, arg: %s, stack_size: %d, priority: %d\n", name, func, arg, stack_size, priority);
 }
 
-int wait_K(USLOSS_Sysargs *args){
+void wait_K(USLOSS_Sysargs *args){
     //SYS_WAIT = args->number;
     kernel_mode("wait_K()");
     int pid = (int)(long)args->arg1;
@@ -169,16 +177,15 @@ int wait_K(USLOSS_Sysargs *args){
     pid = join(&status);
     if(pid == -2){
         args->arg4 = (void*)(long)-2;
-        return -2;
+        return ;
+        // terminate_K(args);
     }
     args->arg1 = (void*)(long)pid;
     args->arg2 = (void*)(long)status;
     args->arg4 = (void*)(long)0;
     // USLOSS_Console("wait_K(): Wait called.  pid: %d, status: 0x%x\n", pid, status);
     change_to_user_mode();
-    return 0;
-    
-
+    // terminate_K(args);
     // USLOSS_Console("wait_K(): Wait called.  pid: %d, status: 0x%x\n", pid, status);
 }
 
@@ -204,35 +211,40 @@ void terminate_K(USLOSS_Sysargs *args){
     change_to_user_mode();
 }
 
-int sem_create_K(USLOSS_Sysargs *args){
+void sem_create_K(USLOSS_Sysargs *args){
     kernel_mode("sem_create_K()");
     if(totalSemUsed == MAXSEMS){
         args->arg4 = (void*)(long)-1;
-        return -1;
+        return ;
+        // terminate_K(args);
     }
     int value = (int)(long)args->arg1;
     if(value < 0){
         args->arg4 = (void*)(long)-1;
-        return -1;
+        return ;
+        // terminate_K(args);
     }
     
     int semID = sem_create(value);
     if(semID == -1){
         args->arg4 = (void*)(long)-1;
-        return -1;
+        return ;
+        // terminate_K(args);
     }
     args->arg1 = (void*)(long)semID;
     args->arg4 = (void*)(long)0;
-    return 0;
+    // return 0;
+    // terminate_K(args);
 }
 
 int sem_create(int value){
+    kernel_mode("sem_create()");
     for(int i = 0; i < MAXSEMS;i++){
         if(SemTable[i].id == -1){
             SemTable[i].id = i;
             SemTable[i].value = value;
             SemTable[i].startingValue = value;
-            SemTable[i].privMBoxID = MboxCreate(0, 0);
+            SemTable[i].privMBoxID = MboxCreate(value, 0); //QUestionable change
             SemTable[i].mutexMBoxID = MboxCreate(1, 0);
             totalSemUsed++;
             return i;
@@ -241,12 +253,86 @@ int sem_create(int value){
     return -1;
 }
 
-int semP_K(int semID){
-    return 0;
+void semP_K(USLOSS_Sysargs *args){
+    kernel_mode("semP_K()");
+    int semID = (int)(long)args->arg1;
+    if(semID < 0 || semID >= MAXSEMS){
+        args->arg4 = (void*)(long)-1;
+        return ;
+        // terminate_K(args);
+    }
+
+    MboxSend(SemTable[semID].mutexMBoxID, NULL, 0);
+    if(SemTable[semID].value == 0){
+        Queue_push(&SemTable[semID].blockedProcesses, &ProcTable[getpid() % MAXPROC]);
+        MboxRecv(SemTable[semID].mutexMBoxID, NULL, 0);
+        int result = MboxRecv(SemTable[semID].privMBoxID, NULL, 0);
+        
+        if(SemTable[semID].id < 0){
+            args->arg4 = (void*)(long)-1;
+            return ;
+            // terminate_K(args);
+        }
+
+        MboxSend(SemTable[semID].mutexMBoxID, NULL, 0);
+
+        if(result < 0){
+            USLOSS_Console("semP_K(): MboxReceive failed.  result = %d\n", result);
+        }
+    }
+    else{
+        SemTable[semID].value--;
+        int result = MboxRecv(SemTable[semID].privMBoxID, NULL, 0);
+        if(result < 0){
+            USLOSS_Console("semP_K(): MboxReceive failed.  result = %d\n", result);
+        }
+    }
+
+    MboxRecv(SemTable[semID].mutexMBoxID, NULL, 0);
+    args->arg4 = (void*)(long)0;
+    // return 0;
+    // terminate_K(args);
 }
 
-int semV_K(int semID){
-    return 0;
+void semV_K(USLOSS_Sysargs *args){
+    kernel_mode("semV_K()");
+    int semID = (int)(long)args->arg1;
+    if(semID < 0 || semID >= MAXSEMS){
+        args->arg4 = (void*)(long)-1;
+        return ;
+        // terminate_K(args);
+    }
+    MboxSend(SemTable[semID].mutexMBoxID, NULL, 0);
+    if(SemTable[semID].blockedProcesses.size > 0){
+        Process *p = Queue_pop(&SemTable[semID].blockedProcesses);
+        MboxRecv(SemTable[semID].mutexMBoxID, NULL, 0);
+        MboxSend(SemTable[semID].privMBoxID, NULL, 0);
+        MboxSend(SemTable[semID].mutexMBoxID, NULL, 0);
+    }
+    else{
+        SemTable[semID].value++;
+        // MboxSend(SemTable[semID].privMBoxID, NULL, 0);
+    }
+    MboxRecv(SemTable[semID].mutexMBoxID, NULL, 0);
+    args->arg4 = (void*)(long)0;
+}
+
+void get_time_of_day_K(USLOSS_Sysargs *args){
+    kernel_mode("get_time_of_day_K()");
+    *((int *)args->arg1) = currentTime();
+    // change_to_user_mode();
+}
+
+void cpu_time_K(USLOSS_Sysargs *args){
+    kernel_mode("cpu_time_K()");
+    *((int *)args->arg1) = readtime();
+    // change_to_user_mode();
+}
+
+void getPID_K(USLOSS_Sysargs *args){
+    kernel_mode("getPID_K()");
+    *((int *)args->arg1) = getpid();
+    // change_to_user_mode();
 }
 
 
