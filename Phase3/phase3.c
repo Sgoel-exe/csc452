@@ -263,7 +263,9 @@ void semP_K(USLOSS_Sysargs *args){
         // terminate_K(args);
     }
 
+
     MboxSend(SemTable[semID].mutexMBoxID, NULL, 0);
+
     if(SemTable[semID].value == 0){
         Queue_push(&SemTable[semID].blockedProcesses, &ProcTable[getpid() % MAXPROC]);
         MboxRecv(SemTable[semID].mutexMBoxID, NULL, 0);
@@ -283,9 +285,10 @@ void semP_K(USLOSS_Sysargs *args){
     }
     else{
         SemTable[semID].value--;
-        int result = MboxRecv(SemTable[semID].privMBoxID, NULL, 0);
+        int result = MboxCondRecv(SemTable[semID].privMBoxID, NULL, 0);
+        // USLOSS_Console("semP_K(): semID = %d\n", semID);
         if(result < 0){
-            USLOSS_Console("semP_K(): MboxReceive failed.  result = %d\n", result);
+            // USLOSS_Console("semP_K(): MboxReceive failed.  result = %d\n", result);
         }
     }
 
