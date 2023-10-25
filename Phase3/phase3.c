@@ -1,3 +1,14 @@
+/**
+ * @file phase3.c
+ * 
+ * @author Muhtasim Al-Farabi, Shrey Goel
+ * 
+ * @brief This file contains the implementation of the functions for Phase 3. It implements the syscall functions so that the syscall vector can call them. 
+ * It implements the functions for the semaphore table and the process table. We implemented a queue to hold the block processes for each entry in the sem table.
+ * We also have structs that represent the process table and the semaphore table. Most functions here
+ * take in USLOSS_Sysargs *args as an argument. We unpack them and then use inside the functions.
+*/
+
 #include "phase3.h"
 #include "phase2.h"
 #include <usloss.h>
@@ -6,21 +17,6 @@
 #include "phase3_usermode.h"
 #include <stdio.h>
 #include <assert.h>
-/**
- * We are trying to make 2 copies of the same funciton, one will be the kernel mode,
- * opne will be the user mode (trampoline type functiosn??). Basically like phase1, but
- * we use mailboxes with semaphores and other funcitons that we made in phase2 and 1 to handle 
- * syscalls.  
- * 
- * We need to create a PROC TABLE
- * We need to call fork and stuff
- * We need to block/unblock things using mailboxes and semaphores
-*/
-
-
-//-------------------Constantt Defines-------------------//
-
-
 
 //-------------------Structures type definations-------------------//
 typedef struct Process Process;
@@ -29,6 +25,9 @@ typedef struct Semaphore Semaphore;
 
 
 //-------------------Structures-------------------//
+/**
+ * @brief This struct represents a queue. It contains the size, head, tail, and type of queue
+*/
 struct Queue
 {
     int size;
@@ -37,8 +36,12 @@ struct Queue
     int type; 
 };
 
+/**
+ * @brief This struct represents a process. It contains the pid, priority, status, startFunc, args, mailBoxID, parent, nextSibling, and childQueue.
+*/
+
 struct Process{
-    int pid;
+    int pid; 
     int priority;
     int status;
     int (*startFunc)(char*);
@@ -48,6 +51,10 @@ struct Process{
     Process *nextSibling;
     Queue childQueue;
 };
+
+/**
+ * @brief This struct represents a semaphore. It contains the id, value, startingValue, blockedProcesses, privMBoxID, and mutexMBoxID.
+*/
 
 struct Semaphore{
     int id;
@@ -60,6 +67,7 @@ struct Semaphore{
 
 
 //-------------------Function Prototypes-------------------//
+
 void nullsys(USLOSS_Sysargs *args);
 void spawn_K(USLOSS_Sysargs *args);
 void wait_K(USLOSS_Sysargs *args);
@@ -73,19 +81,23 @@ void getPID_K(USLOSS_Sysargs *args);
 Process* Queue_pop(Queue *queue);
 Process* Queue_front(Queue *queue);
 void Queue_init(Queue *queue, int type);
-
+void Queue_push(Queue *queue, Process *item);
+void process_init(int pid);
+void change_to_user_mode();
+void kernel_mode(char *func);
+int sem_create(int value);
 int spawn_T(char *args);
 
 //-------------------Global Variables-------------------//
-// void (*systemCallVec[MAXSYSCALLS])(USLOSS_Sysargs *args);
+
 Process ProcTable[MAXPROC];
 Semaphore SemTable[MAXSEMS];
 int totalSemUsed;
 
-
-
 //-------------------Function Implementations-------------------//
-
+/**
+ * @brief This function initializes the process table, semaphore table, and the system call vector. It also initializes the system call vector with the correct functions.
+*/
 void phase3_init(){
     // Initialize the process table
     for(int i = 0; i < MAXPROC; i++){
@@ -126,10 +138,18 @@ void phase3_init(){
 
 }
 
+/**
+ * @brief This function starts the service processes for Phase 3.
+*/
+
 void phase3_start_service_processes(void){
-    // phase4_start_service_processes();
-    // phase5_start_service_processes();
 }
+
+/**
+ * @brief This function is the nullsys function. It is called when a syscall is called that is not implemented. It prints out the syscall number and the PSR.
+ * 
+ * @param args - The arguments passed in to the syscall
+*/
 
 void nullsys(USLOSS_Sysargs *args)
 {
@@ -137,9 +157,15 @@ void nullsys(USLOSS_Sysargs *args)
     terminate_K(args);
 }
 
-void spawn_K(USLOSS_Sysargs *args){ //Add ERROR CHECKING and set arg4 accordingly.
-    //SYS_SPAWN = args->number;
+/**
+ * @brief This function takes in the arguments passed in to spawn and calls fork1 to create a new process. It then adds the child to the parent's child queue. It also initializes the child process.
+ * 
+ * @param args - The arguments passed in to spawn
+*/
+
+void spawn_K(USLOSS_Sysargs *args){ 
     kernel_mode("spawn_K()");
+    //unpack
     int (*func)(char*) = args->arg1;
     char *arg = args->arg2;
     int stack_size = (int)(long)args->arg3;
@@ -148,30 +174,30 @@ void spawn_K(USLOSS_Sysargs *args){ //Add ERROR CHECKING and set arg4 accordingl
     int pid = fork1(name, spawn_T, arg, stack_size, priority);
     if(pid == -1){
         args->arg1 = (void*)(long)-1;
-        // terminate_K(args);
         return ;
     }
-
+    // set the child process
     Process *childProc = &ProcTable[pid % MAXPROC];
     Queue_push(&ProcTable[getpid() % MAXPROC].childQueue, childProc);
 
     if(childProc->pid == -1){
         process_init(pid);
-        //MboxSend(childProc->mailBoxID, NULL, 0);
     }
     childProc->startFunc = func;
     childProc->args = arg;
     childProc->parent = &ProcTable[getpid() % MAXPROC];
     args->arg1 = (void*)(long)pid;
+    // non blocking send
     MboxCondSend(childProc->mailBoxID, NULL, 0);
-    
-    // change_to_user_mode();
-    // terminate_K(args);
-    // USLOSS_Console("spawn_K(): Spawn called.  name: %s, func: 0x%x, arg: %s, stack_size: %d, priority: %d\n", name, func, arg, stack_size, priority);
 }
 
+/**
+ * @brief This function takes in the arguments passed in to wait and calls join to wait for a child process to terminate. It sets the right arguments (passed in as references) and then changes to user mode.
+ * 
+ * @param args - The arguments passed in to wait
+*/
+
 void wait_K(USLOSS_Sysargs *args){
-    //SYS_WAIT = args->number;
     kernel_mode("wait_K()");
     int pid = (int)(long)args->arg1;
     int status = (int)(long)args->arg2;
@@ -179,64 +205,65 @@ void wait_K(USLOSS_Sysargs *args){
     if(pid == -2){
         args->arg4 = (void*)(long)-2;
         return ;
-        // terminate_K(args);
     }
     args->arg1 = (void*)(long)pid;
     args->arg2 = (void*)(long)status;
     args->arg4 = (void*)(long)0;
-    // USLOSS_Console("wait_K(): Wait called.  pid: %d, status: 0x%x\n", pid, status);
     change_to_user_mode();
-    // terminate_K(args);
-    // USLOSS_Console("wait_K(): Wait called.  pid: %d, status: 0x%x\n", pid, status);
 }
 
+/**
+ * @brief This function takes in the arguments passed in to terminate and calls quit to terminate the process. It also waits for all the children to terminate. It then changes to user mode.
+ * 
+ * @param args - The arguments passed in to terminate
+*/
+
 void terminate_K(USLOSS_Sysargs *args){
-    //SYS_TERMINATE = args->number;
-    // USLOSS_Console("terminate_K(): called.  status = %d, pid = %d\n", (int)(long)args->arg1, getpid());
     kernel_mode("terminate_K()");
     int status = (int)(long)args->arg1;
-    int joinRet = 0;
     int currPid = getpid();
     int temp;
+    // join all children
     while(ProcTable[currPid % MAXPROC].childQueue.size > 0){
         Queue_pop(&ProcTable[currPid % MAXPROC].childQueue);
-        joinRet = join(&temp);
-        // USLOSS_Console("terminate_K(): Current pid: %d, joined with PID: %d", currPid,joinRet);
+        join(&temp);
     }
-    // Process* parent = ProcTable[currPid % MAXPROC].parent;
-    // if(parent != NULL){
-    //     Queue_remove(&parent->childQueue, currPid);
-    // }
     quit(status);
     args->arg1 = (void*)(long)status;
     change_to_user_mode();
 }
 
+/**
+ * @brief This function takes in the arguments passed in to sem_create and calls sem_create to create a new semaphore. It then sets the right arguments.
+ * 
+ * @param args - The arguments passed in to sem_create
+*/
 void sem_create_K(USLOSS_Sysargs *args){
     kernel_mode("sem_create_K()");
     if(totalSemUsed == MAXSEMS){
         args->arg4 = (void*)(long)-1;
         return ;
-        // terminate_K(args);
     }
     int value = (int)(long)args->arg1;
     if(value < 0){
         args->arg4 = (void*)(long)-1;
-        return ;
-        // terminate_K(args);
+        return;
     }
     
     int semID = sem_create(value);
     if(semID == -1){
         args->arg4 = (void*)(long)-1;
-        return ;
-        // terminate_K(args);
+        return;
     }
     args->arg1 = (void*)(long)semID;
     args->arg4 = (void*)(long)0;
-    // return 0;
-    // terminate_K(args);
 }
+
+/**
+ * @brief This function creates a new semaphore. It takes in the value of the semaphore and returns the id of the semaphore. It loops throguh the semaphore table and finds the first empty entry.
+ * 
+ * @param value - The value of the semaphore
+*/
 
 int sem_create(int value){
     kernel_mode("sem_create()");
@@ -245,7 +272,7 @@ int sem_create(int value){
             SemTable[i].id = i;
             SemTable[i].value = value;
             SemTable[i].startingValue = value;
-            SemTable[i].privMBoxID = MboxCreate(value, 0); //QUestionable change
+            SemTable[i].privMBoxID = MboxCreate(value, 0);
             SemTable[i].mutexMBoxID = MboxCreate(1, 0);
             totalSemUsed++;
             return i;
@@ -253,92 +280,125 @@ int sem_create(int value){
     }
     return -1;
 }
-
+/**
+ * @brief This function takes in the arguments passed in to semP. If the values of the sem is zero,
+ * then it blocks the process, essentially working as a lock mechanism. If the value is non zero, then
+ * it decrements the value and returns. 
+ * 
+ * @param args - The arguments passed in to semP
+*/
 void semP_K(USLOSS_Sysargs *args){
     kernel_mode("semP_K()");
+    // error checks
     int semID = (int)(long)args->arg1;
     if(semID < 0 || semID >= MAXSEMS){
         args->arg4 = (void*)(long)-1;
-        return ;
-        // terminate_K(args);
+        return;
     }
 
-
+    //lock
     MboxSend(SemTable[semID].mutexMBoxID, NULL, 0);
-
+    // for zero value, block
     if(SemTable[semID].value == 0){
         Queue_push(&SemTable[semID].blockedProcesses, &ProcTable[getpid() % MAXPROC]);
+        // unlock
         MboxRecv(SemTable[semID].mutexMBoxID, NULL, 0);
         int result = MboxRecv(SemTable[semID].privMBoxID, NULL, 0);
         
         if(SemTable[semID].id < 0){
             args->arg4 = (void*)(long)-1;
-            return ;
-            // terminate_K(args);
+            return;
         }
-
+        // lock
         MboxSend(SemTable[semID].mutexMBoxID, NULL, 0);
 
         if(result < 0){
             USLOSS_Console("semP_K(): MboxReceive failed.  result = %d\n", result);
         }
     }
+    // else decrement the value
     else{
         SemTable[semID].value--;
         int result = MboxCondRecv(SemTable[semID].privMBoxID, NULL, 0);
-        // USLOSS_Console("semP_K(): semID = %d\n", semID);
         if(result < 0){
-            // USLOSS_Console("semP_K(): MboxReceive failed.  result = %d\n", result);
         }
     }
-
+    // unlock
     MboxRecv(SemTable[semID].mutexMBoxID, NULL, 0);
     args->arg4 = (void*)(long)0;
-    // return 0;
-    // terminate_K(args);
 }
+
+/**
+ * @brief This function takes in the arguments passed in to semV. If there are blocked processes, then it unblocks the first process in the queue. If there are no blocked processes, then it increments the value.
+ * 
+ * @param args - The arguments passed in to semV
+*/
 
 void semV_K(USLOSS_Sysargs *args){
     kernel_mode("semV_K()");
+    // error checks
     int semID = (int)(long)args->arg1;
     if(semID < 0 || semID >= MAXSEMS){
         args->arg4 = (void*)(long)-1;
-        return ;
-        // terminate_K(args);
+        return;
     }
+    // sending to mutexMBoxID to lock
     MboxSend(SemTable[semID].mutexMBoxID, NULL, 0);
     if(SemTable[semID].blockedProcesses.size > 0){
-        Process *p = Queue_pop(&SemTable[semID].blockedProcesses);
-        MboxRecv(SemTable[semID].mutexMBoxID, NULL, 0);
-        MboxSend(SemTable[semID].privMBoxID, NULL, 0);
-        MboxSend(SemTable[semID].mutexMBoxID, NULL, 0);
+        Queue_pop(&SemTable[semID].blockedProcesses);
+        // unlock
+        MboxRecv(SemTable[semID].mutexMBoxID, NULL, 0); 
+        // send to privMBoxID
+        MboxSend(SemTable[semID].privMBoxID, NULL, 0); 
+        // lock
+        MboxSend(SemTable[semID].mutexMBoxID, NULL, 0); 
     }
     else{
         SemTable[semID].value++;
-        // MboxSend(SemTable[semID].privMBoxID, NULL, 0);
     }
+    // unlock
     MboxRecv(SemTable[semID].mutexMBoxID, NULL, 0);
     args->arg4 = (void*)(long)0;
 }
+
+/**
+ * @brief This function takes in the arguments passed in to get_time_of_day and sets that argument to the current time.
+ * 
+ * @param args - The arguments passed in to get_time_of_day
+*/
 
 void get_time_of_day_K(USLOSS_Sysargs *args){
     kernel_mode("get_time_of_day_K()");
     args->arg1 = (void *)(long)currentTime();
-    // change_to_user_mode();
 }
+
+/**
+ * @brief This function takes in the arguments passed in to cpu_time and sets that argument to the built in readTime
+ * 
+ * @param args - The arguments passed in to cpu_time
+*/
 
 void cpu_time_K(USLOSS_Sysargs *args){
     kernel_mode("cpu_time_K()");
     args->arg1 = (void *)(long)readtime();
-    // change_to_user_mode();
 }
+
+/**
+ * @brief This function takes in the arguments passed in to getPID and sets that argument to the current pid.
+ * 
+ * @param args - The arguments passed in to getPID
+*/
 
 void getPID_K(USLOSS_Sysargs *args){
     kernel_mode("getPID_K()");
     args->arg1 = (void *)(long)getpid();
-    // USLOSS_Console("getPID_K(): called.  pid = %d\n", getpid());
-    // change_to_user_mode();
 }
+
+/**
+ * @brief This function initializes the process table. It takes in the pid and initializes the process table entry. This is just a way to keep track of the processes.
+ * 
+ * @param pid - The pid of the process
+*/
 
 
 void process_init(int pid){
@@ -354,10 +414,19 @@ void process_init(int pid){
     Queue_init(&ProcTable[i].childQueue, 1);
 }
 
+/**
+ * @brief This function changes the mode to user mode.
+ *
+*/
+
 void change_to_user_mode(){
     int result = USLOSS_PsrSet(USLOSS_PsrGet() & ~USLOSS_PSR_CURRENT_MODE);
-    // assert(result == USLOSS_DEV_OK);
+    result++;
 }
+
+/**
+ * @brief This function checks if the mode is in kernel mode. If it is not, then it halts.
+*/
 
 void kernel_mode(char *func){
     if((USLOSS_PSR_CURRENT_MODE & USLOSS_PsrGet()) == 0){
@@ -369,10 +438,15 @@ void kernel_mode(char *func){
 
 
 //---------------------------Trampoline Functions---------------------------//
+/**
+ * @brief This function is the trampoline function for the spawn function. It takes in the args and calls
+ * the function that was passed in as an argument to spawn in user mode. It then terminates the process.
+ * 
+ * @param args - The arguments passed in to spawn
+ * @return 0
+*/
 int spawn_T(char *args){
-    if(isZapped()){
-        terminate_K(1);
-    }
+    // check if we have a process to run
     Process *p = &ProcTable[getpid() % MAXPROC];
     if(p->pid == -1){
         process_init(getpid());
@@ -380,7 +454,9 @@ int spawn_T(char *args){
     }
 
     change_to_user_mode();
+    // run the function in usermode
     int status = p->startFunc(p->args);
+    // terminate after it returns
     Terminate(status);
     return 0;
 }
@@ -461,26 +537,4 @@ Process* Queue_front(Queue *queue)
         return NULL;
     }
     return queue->head;
-}
-
-Queue_remove(Queue *queue, int pid){
-    if(queue->size == 0){
-        return;
-    }
-    Process *curr = queue->head;
-    Process *prev = NULL;
-    while(curr != NULL){
-        if(curr->pid == pid){
-            if(prev == NULL){
-                queue->head = curr->nextSibling;
-            }
-            else{
-                prev->nextSibling = curr->nextSibling;
-            }
-            queue->size--;
-            return;
-        }
-        prev = curr;
-        curr = curr->nextSibling;
-    }
 }
