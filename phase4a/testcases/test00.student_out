@@ -1,7 +1,8 @@
 phase5_start_service_processes() called -- currently a NOP
 start4(): started
           going to sleep for 5 seconds.
-start4(): Sleep starts at    202
-start4(): Sleep done at  5090082
+start4(): Sleep starts at     61
+addHeap: Procces PID: 5
+removeHeap: Procces PID: 5
+start4(): Sleep done at  5050067l
 start4(): done.
-finish(): The simulation is now terminating.
