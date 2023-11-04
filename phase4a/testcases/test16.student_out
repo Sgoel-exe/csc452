@@ -1,0 +1,39 @@
+phase4_start_service_processes: called
+phase5_start_service_processes() called -- currently a NOP
+start4(): disk scheduling test, 8 children
+          algorithm test           
+          different tracks
+going to write track 5
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status 731498944
+going to write track 3
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status 731499968
+going to write track 9
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status 731498944
+going to write track 0
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status 731498432
+going to write track 7
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status 731499968
+going to write track 2
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status 731499456
+going to write track 1
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status 731498944
+going to write track 6
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status 731499456
+process 13 quit with status 9
+process 12 quit with status 8
+process 11 quit with status 7
+process 10 quit with status 6
+process 9 quit with status 5
+process 8 quit with status 4
+process 7 quit with status 3
+process 6 quit with status 2
+start4(): done 0
+finish(): The simulation is now terminating.

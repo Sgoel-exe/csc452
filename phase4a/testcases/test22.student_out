@@ -1,0 +1,73 @@
+phase4_start_service_processes: called
+phase5_start_service_processes() called -- currently a NOP
+start4(): Spawn four children.
+Child0(): start
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+Child0(): done
+Child1(): start
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+Child1(): done
+Child2(): start
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+Child2(): done
+Child3(): start
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+kernTermRead: called
+buffer written ''
+kernTermWrite: called
+Child3(): done
+start4(): done.
+finish(): The simulation is now terminating.

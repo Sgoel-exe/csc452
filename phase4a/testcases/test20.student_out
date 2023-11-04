@@ -1,0 +1,79 @@
+phase4_start_service_processes: called
+phase5_start_service_processes() called -- currently a NOP
+start4(): Spawn eight children.  
+          4 write 5 lines to a diff terminal.
+          4 read 5 lines to a diff terminal.
+Child0(): start
+kernTermRead: called
+Child0(): read kernTermRead: called
+Child0(): read kernTermRead: called
+Child0(): read kernTermRead: called
+Child0(): read kernTermRead: called
+Child0(): read Child0(): done
+Child_20(): start
+Child_20(): writing to term0
+kernTermWrite: called
+Child_20(): writing to term0
+kernTermWrite: called
+Child_20(): writing to term0
+kernTermWrite: called
+Child_20(): writing to term0
+kernTermWrite: called
+Child_20(): writing to term0
+kernTermWrite: called
+Child1(): start
+kernTermRead: called
+Child1(): read kernTermRead: called
+Child1(): read kernTermRead: called
+Child1(): read kernTermRead: called
+Child1(): read kernTermRead: called
+Child1(): read Child1(): done
+Child_21(): start
+Child_21(): writing to term1
+kernTermWrite: called
+Child_21(): writing to term1
+kernTermWrite: called
+Child_21(): writing to term1
+kernTermWrite: called
+Child_21(): writing to term1
+kernTermWrite: called
+Child_21(): writing to term1
+kernTermWrite: called
+Child2(): start
+kernTermRead: called
+Child2(): read kernTermRead: called
+Child2(): read kernTermRead: called
+Child2(): read kernTermRead: called
+Child2(): read kernTermRead: called
+Child2(): read Child2(): done
+Child_22(): start
+Child_22(): writing to term2
+kernTermWrite: called
+Child_22(): writing to term2
+kernTermWrite: called
+Child_22(): writing to term2
+kernTermWrite: called
+Child_22(): writing to term2
+kernTermWrite: called
+Child_22(): writing to term2
+kernTermWrite: called
+Child3(): start
+kernTermRead: called
+Child3(): read kernTermRead: called
+Child3(): read kernTermRead: called
+Child3(): read kernTermRead: called
+Child3(): read kernTermRead: called
+Child3(): read Child3(): done
+Child_23(): start
+Child_23(): writing to term3
+kernTermWrite: called
+Child_23(): writing to term3
+kernTermWrite: called
+Child_23(): writing to term3
+kernTermWrite: called
+Child_23(): writing to term3
+kernTermWrite: called
+Child_23(): writing to term3
+kernTermWrite: called
+start4(): done.
+finish(): The simulation is now terminating.

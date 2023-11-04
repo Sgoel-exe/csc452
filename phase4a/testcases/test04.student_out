@@ -1,0 +1,5 @@
+termDriver: called
+termDriver: called
+termDriver: called
+termDriver: called
+test04: phase1.c:1042: dispatcher: Assertion `new_proc != NULL' failed.

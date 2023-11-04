@@ -1,0 +1,20 @@
+phase4_start_service_processes: called
+phase5_start_service_processes() called -- currently a NOP
+start4(): started
+kernDiskSize: called
+start4(): unit 0, sector size 0, track size 0, disk size 0
+kernDiskSize: called
+start4(): unit 1, sector size 1, track size 0, disk size 0
+
+start4(): writing to disk 0, track 5, sector 0
+kernDiskWrite: called
+start4(): DiskWrite returned status = -365646992
+
+start4(): reading from disk 0, track 5, sector 0
+kernDiskRead: called
+start4(): DiskRead returned status = -365646480
+
+start4(): disk_buf_B contains:
+
+start4(): calling Terminate
+finish(): The simulation is now terminating.

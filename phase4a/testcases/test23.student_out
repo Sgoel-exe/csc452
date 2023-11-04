@@ -1,0 +1,23 @@
+phase4_start_service_processes: called
+phase5_start_service_processes() called -- currently a NOP
+start4(): Spawning 5 children to sleep
+ChildS(0): Sleeping for 5 seconds
+kernSleep: called
+ChildS(0): After sleeping 5 seconds, diff in sys_clock is 6
+ChildS(1): Sleeping for 4 seconds
+kernSleep: called
+ChildS(1): After sleeping 4 seconds, diff in sys_clock is 5
+ChildS(2): Sleeping for 3 seconds
+kernSleep: called
+ChildS(2): After sleeping 3 seconds, diff in sys_clock is 8
+ChildS(3): Sleeping for 2 seconds
+kernSleep: called
+ChildS(3): After sleeping 2 seconds, diff in sys_clock is 5
+ChildS(4): Sleeping for 1 seconds
+kernSleep: called
+ChildS(4): After sleeping 1 seconds, diff in sys_clock is 5
+start4(): Spawning 2 children to termfuncs
+ChildTR(): start
+kernTermRead: called
+ChildTR(): ERROR: ReadTerm
+test23: phase1.c:485: quit: Assertion `0 <= status && status <= 255' failed.

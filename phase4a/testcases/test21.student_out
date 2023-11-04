@@ -1,0 +1,37 @@
+phase4_start_service_processes: called
+phase5_start_service_processes() called -- currently a NOP
+start4(): Spawn one child.
+Child0(): start
+kernTermRead: called
+Child0(): buffer read from term0   'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+kernTermWrite: called
+kernTermRead: called
+Child0(): buffer read from term0   'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+kernTermWrite: called
+kernTermRead: called
+Child0(): buffer read from term0   'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+kernTermWrite: called
+kernTermRead: called
+Child0(): buffer read from term0   'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+kernTermWrite: called
+kernTermRead: called
+Child0(): buffer read from term0   'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+kernTermWrite: called
+kernTermRead: called
+Child0(): buffer read from term0   'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+kernTermWrite: called
+kernTermRead: called
+Child0(): buffer read from term0   'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+kernTermWrite: called
+kernTermRead: called
+Child0(): buffer read from term0   'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+kernTermWrite: called
+kernTermRead: called
+Child0(): buffer read from term0   'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+kernTermWrite: called
+kernTermRead: called
+Child0(): buffer read from term0   'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+kernTermWrite: called
+Child0(): done
+start4(): done.
+finish(): The simulation is now terminating.

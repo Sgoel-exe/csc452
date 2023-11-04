@@ -1,0 +1,72 @@
+phase4_start_service_processes: called
+phase5_start_service_processes() called -- currently a NOP
+start4(): disk scheduling test, create 4 processes that write
+          various places on the disk.  After the 4 processes are
+          done, start4 reads the 4 locations & prints the
+          results.  Uses disk 1.
+kernDiskWrite: called
+disk_put returned error   0
+kernDiskWrite: called
+disk_put returned error   3
+kernDiskWrite: called
+disk_put returned error   0
+kernDiskWrite: called
+disk_put returned error   5
+kernDiskWrite: called
+disk_put returned error   0
+kernDiskWrite: called
+disk_put returned error   5
+kernDiskWrite: called
+disk_put returned error   0
+kernDiskWrite: called
+disk_put returned error   5
+kernDiskWrite: called
+disk_put returned error   4
+kernDiskWrite: called
+disk_put returned error   1
+kernDiskWrite: called
+disk_put returned error   6
+kernDiskWrite: called
+disk_put returned error   1
+kernDiskWrite: called
+disk_put returned error   6
+kernDiskWrite: called
+disk_put returned error   1
+kernDiskWrite: called
+disk_put returned error   9
+kernDiskWrite: called
+disk_put returned error   9
+kernDiskWrite: called
+disk_put returned error   2
+kernDiskWrite: called
+disk_put returned error   7
+kernDiskWrite: called
+disk_put returned error   2
+kernDiskWrite: called
+disk_put returned error   7
+kernDiskWrite: called
+disk_put returned error   2
+kernDiskWrite: called
+disk_put returned error   2
+kernDiskWrite: called
+disk_put returned error   9
+kernDiskWrite: called
+disk_put returned error   3
+kernDiskWrite: called
+disk_put returned error   8
+kernDiskWrite: called
+disk_put returned error   3
+kernDiskWrite: called
+disk_put returned error   8
+kernDiskWrite: called
+disk_put returned error   3
+kernDiskRead: called
+start4(): disk_get returned errorstart4(): read: xxx
+kernDiskRead: called
+start4(): disk_get returned errorstart4(): read: xxx
+kernDiskRead: called
+start4(): disk_get returned errorstart4(): read: xxx
+kernDiskRead: called
+start4(): disk_get returned errorstart4(): read: xxx
+start4(): done. checkSum = 0
+finish(): The simulation is now terminating.

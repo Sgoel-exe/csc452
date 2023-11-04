@@ -1,0 +1,31 @@
+phase4_start_service_processes: called
+phase5_start_service_processes() called -- currently a NOP
+start4(): disk scheduling test, create 6 processes that write
+          3 to disk0         
+          3 to disk1         
+ubiq: going to write to unit 0 track 5
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status -143791680
+ubiq: going to write to unit 0 track 3
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status -143790656
+ubiq: going to write to unit 0 track 9
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status -143791680
+ubiq: going to write to unit 1 track 4
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status -143792192
+ubiq: going to write to unit 1 track 2
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status -143791168
+ubiq: going to write to unit 1 track 8
+kernDiskWrite: called
+ERROR: DiskWrite()   retval 4   status -143792192
+process 11 quit with status 7
+process 10 quit with status 6
+process 9 quit with status 5
+process 8 quit with status 4
+process 7 quit with status 3
+process 6 quit with status 2
+start4(): done 0
+finish(): The simulation is now terminating.

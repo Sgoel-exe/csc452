@@ -1,0 +1,7 @@
+phase4_start_service_processes: called
+phase5_start_service_processes() called -- currently a NOP
+start4(): Writing data to 3 disk sectors, wrapping to next track
+
+start4(): Disk 0:
+kernDiskWrite: called
+test13: testcases/test13.c:40: start4: Assertion `result == 0' failed.
