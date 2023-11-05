@@ -21,7 +21,7 @@ int testcase_main()
     USLOSS_Console("Phase 1A TEMPORARY HACK: Manually switching to XXp1()\n");
     TEMP_switchTo(pid1);
     USLOSS_Console("testcase_main(): after fork of child %d -- you should not see this until XXp1, and both of the XXp2 processes, have completed.\n", pid1);
-    //dumpProcesses();
+
     USLOSS_Console("testcase_main(): performing join\n");
     kidpid = join(&status);
     if (kidpid != pid1 || status != 3)
@@ -30,6 +30,7 @@ int testcase_main()
         USLOSS_Halt(1);
     }
     USLOSS_Console("testcase_main(): exit status for child %d is %d\n", kidpid, status); 
+
     return 0;
 }
 

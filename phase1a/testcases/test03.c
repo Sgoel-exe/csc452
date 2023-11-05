@@ -22,7 +22,6 @@ int testcase_main()
     int PROC_COUNT = MAXPROC-8;
 
     for (j = 0; j < 3; j++) {
-        //USLOSS_Console("\n*** Start of pid %d ***\n", getNextPID());
         USLOSS_Console("\n*** Start of round %d of the fork()/join() operations ***\n", j);
 
         for (i = 0; i < PROC_COUNT; i++) {
@@ -61,7 +60,6 @@ int testcase_main()
             USLOSS_Console("ERROR: testcase_main(): join() after all of the children have been cleaned up worked, when it was supposed to return -2!!!  rc=%d\n", kidpid);
             USLOSS_Halt(1);
         }
-        //ProcPrinter(getNextPID());
     }
     return 0;
 }

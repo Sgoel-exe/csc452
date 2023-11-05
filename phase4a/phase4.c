@@ -6,6 +6,7 @@
 #include <phase2.h>
 #include <phase3.h>
 #include <stdio.h>
+#include <string.h>  
 
 //-------------Structs------------------//
 typedef struct procStruct{
@@ -40,6 +41,8 @@ int kernDiskRead (void *diskBuffer, int unit, int track, int first,int sectors, 
 
 static int clockDriver(char *arg);
 static int termDriver(char *args);
+static int termReader(char *args);
+static int termWriter(char *args);
 
 void init_proc(int pid);
 void initHeap(procHeap * heap);
@@ -93,31 +96,25 @@ void phase4_init(){
         pidMailbox[i] = MboxCreate(1,sizeof(int));
     }
 
-    for(int i = 0; i < USLOSS_TERM_UNITS; i++){
-        // termProcTable[i][0] = fork1("termReader", termDriver, (void *)i, USLOSS_MIN_STACK, 2);
-    }
-
     // MboxRecv(MainMbox, NULL, 0);
+    // char filename[50];
+    // for(int i = 0; i < USLOSS_TERM_UNITS; i++)
+    // {
+    //     int ctrl = 0;
+    //     ctrl = USLOSS_TERM_CTRL_RECV_INT(ctrl);
+    //     USLOSS_DeviceOutput(USLOSS_TERM_DEV, i, (void *)((long) ctrl));
+    //     // file stuff
+    //     sprintf(filename, "term%d.out", i);
+    //     FILE *f = fopen(filename, "a+");
+    //     fprintf(f, "last line\n");
+    //     fflush(f);
+    //     fclose(f);
+    // }
 }
 
-// void startProcesses(){
-//     USLOSS_Console("startProcesses(): called\n");
-// }
-
-// void startClock(){
-//     int status;
-//     clockDriverPID = fork1("clockDriver", clockDriver, NULL, USLOSS_MIN_STACK, 2);
-//     if(clockDriverPID < 0){
-//         USLOSS_Console("startProcesses(): Can't create clockDriver\n");
-//         USLOSS_Halt(1);
-//     }
-//     MboxRecv(MainMbox, NULL, 0);
-
-//     // zap(clockDriverPID);
-//     // join(&status);
-// }
 
 void phase4_start_service_processes(){
+    char terminalBuffer[10];
     clockDriverPID = fork1("clockDriver", clockDriver, NULL, USLOSS_MIN_STACK, 2);
     int status;
     if(clockDriverPID < 0){
@@ -125,7 +122,10 @@ void phase4_start_service_processes(){
         USLOSS_Halt(1);
     }
     for(int i = 0; i < USLOSS_TERM_UNITS; i++){
-        termProcTable[i][0] = fork1("termReader", termDriver, (void *)i, USLOSS_MIN_STACK, 2);
+        sprintf(terminalBuffer, "%d", i);
+        termProcTable[i][0] = fork1("termDriver", termDriver, terminalBuffer, USLOSS_MIN_STACK, 2);
+        termProcTable[i][1] = fork1("termReader", termReader, terminalBuffer, USLOSS_MIN_STACK, 2);
+        termProcTable[i][2] = fork1("termWriter", termWriter, terminalBuffer, USLOSS_MIN_STACK, 2);
     }
 
     // zap(clockDriverPID);
@@ -149,11 +149,6 @@ int kernSleep(int seconds){
     if(procTable[procPID % MAXPROC].pid == -1){
         init_proc(procPID);
     }
-    // if(procPID == 4){
-    //     blockMe(21);
-    //     unblockProc(procPID);
-    //     return 0;
-    // }
     procTable[procPID % MAXPROC].wakeTime =currentTime() + seconds*1000000;
     addHeap(&slHeap, &procTable[procPID % MAXPROC]);
     // clockDriver("PlaceHolder");
@@ -172,9 +167,16 @@ void term_write_sys(USLOSS_Sysargs *args){
     args->arg4 = (void *)(long)result;
     args->arg5 = (void *)(long)numCharsRead;
 }
-int  kernTermWrite(char *buffer, int bufferSize, int unitID,int *numCharsRead){
-    USLOSS_Console("kernTermWrite: called\n");
-    return 0;
+int  kernTermWrite(char *buffer, int bufferSize, int unit,int *numCharsRead){
+    if(unit < 0 || unit > USLOSS_TERM_UNITS -1 || bufferSize < 0){
+        return -1;
+    }
+    int pid = getpid();
+    MboxSend(pidMailbox[unit], &pid, sizeof(int));
+    MboxSend(lineWriteMailBox[unit], buffer, bufferSize);
+    MboxRecv(procTable[pid % MAXPROC].mboxID, NULL, 0);
+    blockMe(22);
+    return bufferSize;
 }
 
 void term_read_sys(USLOSS_Sysargs *args){
@@ -184,10 +186,31 @@ void term_read_sys(USLOSS_Sysargs *args){
     int numCharsRead = 0;
     int result = kernTermRead(buffer, bufferSize, unitID, &numCharsRead);
     args->arg4 = (void *)(long)result;
-    args->arg5 = (void *)(long)numCharsRead;
+    args->arg2 = (void *)(long)numCharsRead;
 }
-int  kernTermRead (char *buffer, int bufferSize, int unitID,int *numCharsRead){
-    USLOSS_Console("kernTermRead: called\n");
+int  kernTermRead (char *buffer, int bufferSize, int unit,int *numCharsRead){
+    if(unit < 0 || unit > USLOSS_TERM_UNITS -1 || bufferSize <= 0){
+        return -1;
+    }
+    char line[MAXLINE];
+    int ctrl = 0;
+
+    if(termInterrupt[unit] == 0){
+        ctrl = USLOSS_TERM_CTRL_RECV_INT(ctrl);
+        USLOSS_DeviceOutput(USLOSS_TERM_DEV, unit, (void *)(long)ctrl);
+        termInterrupt[unit] = 1;
+    }
+    int ret = MboxRecv(lineReadMailBox[unit], &line, MAXLINE);
+    // line[ret] = '\0';
+    if(ret > bufferSize){
+        ret = bufferSize;
+        
+    }
+    // memcpy(buffer, line, ret);
+    strncpy(buffer, line, ret);
+    // buffer[ret] = '\0';
+    *numCharsRead = ret;
+    // dumpProcesses();
     return 0;
 }
 
@@ -261,6 +284,92 @@ static int clockDriver(char *arg){
 
 static int termDriver(char *args){
     // USLOSS_Console("termDriver: called\n");
+    int status;
+    int unit = atoi((char *)args);
+    while(!isZapped()){
+        waitDevice(USLOSS_TERM_INT, unit, &status);
+        int recv = USLOSS_TERM_STAT_RECV(status);
+        if(recv == USLOSS_DEV_BUSY){
+            MboxCondSend(charRecvMailBox[unit], &status, sizeof(int));
+        }
+        int xmit = USLOSS_TERM_STAT_XMIT(status);
+        if(xmit == USLOSS_DEV_READY){
+            MboxCondSend(charSendMailBox[unit], &status, sizeof(int));
+        }
+    }
+    return 0;
+}
+
+static int termReader(char *args){
+    int unit = atoi((char *)args);
+    int i, recv, next = 0;
+    char buff[MAXLINE];
+    for(i = 0; i < MAXLINE; i++){
+        buff[i] = '\0';
+    }
+    while(!isZapped()){
+        MboxRecv(charRecvMailBox[unit], &recv, sizeof(int));
+        char c = USLOSS_TERM_STAT_CHAR(recv);
+        buff[next] = c;
+        next++;
+
+        if(c == '\n' || next == MAXLINE){
+            buff[next] = '\0';
+            MboxCondSend(lineReadMailBox[unit], buff, next);
+            next = 0;
+            for(i = 0; i < MAXLINE; i++){
+                buff[i] = '\0';
+            }
+        }
+    }
+    return 0;
+}
+
+static int termWriter(char *args){
+    int unit = atoi((char *)args);
+    int size,next,status,ctrl = 0;
+    
+    char filename[50];
+    sprintf(filename, "term%d.out", unit);
+    FILE *f = fopen(filename, "r+");
+    
+    char buff[MAXLINE];
+    while(!isZapped()){
+        size = MboxRecv(lineWriteMailBox[unit], buff, MAXLINE);
+        ctrl = USLOSS_TERM_CTRL_XMIT_INT(1);
+        USLOSS_DeviceOutput(USLOSS_TERM_DEV, unit, (void *)(long)ctrl);
+        next = 0;
+        while(next < size){
+            MboxRecv(charSendMailBox[unit], &status, sizeof(int));
+            int temp = USLOSS_TERM_STAT_XMIT(status);
+            if(temp != USLOSS_DEV_READY){
+                ctrl = 0;
+                ctrl = USLOSS_TERM_CTRL_CHAR(ctrl,buff[next]);
+                ctrl = USLOSS_TERM_CTRL_XMIT_CHAR(ctrl);
+                ctrl = USLOSS_TERM_CTRL_XMIT_INT(ctrl);
+                USLOSS_DeviceOutput(USLOSS_TERM_DEV, unit, (void *)(long)ctrl);
+            }
+            if(buff[next] == 0x00){
+                continue;
+            }
+            fwrite(&buff[next], sizeof(char), 1, f);
+            fflush(f);
+            
+            next++;
+        }
+        ctrl = 0;
+        if(termInterrupt[unit] == 1){
+            ctrl = USLOSS_TERM_CTRL_RECV_INT(ctrl);
+        }
+        USLOSS_DeviceOutput(USLOSS_TERM_DEV, unit, (void *)(long)ctrl);
+        termInterrupt[unit] = 0;
+        int pid;
+        MboxRecv(pidMailbox[unit], &pid, sizeof(int));
+        MboxSend(procTable[pid % MAXPROC].mboxID, NULL, 0);
+        unblockProc(pid);
+    }
+    fclose(f);
+    return 0;
 }
 //-------------Utility Functions------------------//
 void init_proc(int pid){

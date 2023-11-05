@@ -23,6 +23,7 @@ int testcase_main()
 
     pid2 = fork1("XXp2", XXp2, "XXp2", USLOSS_MIN_STACK, 5);
     USLOSS_Console("testcase_main(): after fork of child %d -- you should see this before XXp2 runs.\n", pid2);
+
     USLOSS_Console("testcase_main(): performing first join\n");
     kidpid = join(&status);
     if (kidpid != pid1 || status != 3)

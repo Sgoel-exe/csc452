@@ -15,7 +15,7 @@ int testcase_main()
     USLOSS_Console("EXPECTATION: The simulation should be terminated as soon as fork() is called, since we are not in kernel mode.\n");
 
     /* sanity check: are interrupts enabled so far? */
-    if ( (USLOSS_PsrGet() & USLOSS_PSR_CURRENT_MODE) == 0)
+    if ( (USLOSS_PsrGet() & USLOSS_PSR_CURRENT_INT) == 0)
     {
         USLOSS_Console("ERROR: It looks like you are running testcase_main() with interrupts disabled, instead of enabled.  Fix that!\n");
         USLOSS_Halt(1);
