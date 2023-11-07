@@ -1,4 +1,13 @@
-
+/**
+ * @file phase4.c
+ * 
+ * @author Shrey Goel, Muhtasim Al-Farabi
+ * 
+ * @brief This file contains the implementation of the functions for Phase 4. It implements the syscall functions so that the syscall vector can call them. 
+ * It implements the functions for the process heap and the process table. We implemented a heap to manage the processes for each entry in the process table.
+ * We also have structs that represent the process table and the process heap. Most functions here
+ * take in USLOSS_Sysargs *args as an argument. We unpack them and then use inside the functions.
+ */
 #include <phase4.h>
 #include <usyscall.h>
 #include <usloss.h>
@@ -7,6 +16,7 @@
 #include <phase3.h>
 #include <stdio.h>
 #include <string.h>  
+#include <stdlib.h>
 
 //-------------Structs------------------//
 typedef struct procStruct{
@@ -39,15 +49,14 @@ int kernDiskWrite(void *diskBuffer, int unit, int track, int first,int sectors, 
 void disk_read_sys(USLOSS_Sysargs *args);
 int kernDiskRead (void *diskBuffer, int unit, int track, int first,int sectors, int *status);
 
+//Daemon Functions
 static int clockDriver(char *arg);
 static int termDriver(char *args);
-static int termReader(char *args);
-static int termWriter(char *args);
 
+//Utility Functions
 void init_proc(int pid);
 void initHeap(procHeap * heap);
 void addHeap(procHeap * heap, procStruct * proc);
-void heapify(procHeap * heap);
 procStruct * removeHeap(procHeap * heap);
 procStruct * peekHeap(procHeap * heap);
 
@@ -55,20 +64,26 @@ procStruct * peekHeap(procHeap * heap);
 //-------------Global Variables------------------//
 procStruct procTable[MAXPROC];
 procHeap slHeap;
-
 int MainMbox;
 static int clockDriverPID;
 
 //Terminal Stuff
-int charRecvMailBox[USLOSS_TERM_UNITS];
-int charSendMailBox[USLOSS_TERM_UNITS];
-int lineReadMailBox[USLOSS_TERM_UNITS];
-int lineWriteMailBox[USLOSS_TERM_UNITS];
-int pidMailbox[USLOSS_TERM_UNITS];
-int termInterrupt[USLOSS_TERM_UNITS];
-int termProcTable[USLOSS_TERM_UNITS][3];
+int terminalLines[USLOSS_TERM_UNITS][MAXLINE];
+int terminalLineMbox[USLOSS_TERM_UNITS];
+int terminalReadMbox[USLOSS_TERM_UNITS];
+int terminalWrite[USLOSS_TERM_UNITS];
 
 //-------------Function Implementations------------------//
+
+/**
+ * @brief Initializes the Phase 4 of the project.
+ *
+ * This function is responsible for setting up any necessary data structures and 
+ * configurations needed for the execution of Phase 4. It does not take any arguments 
+ * and does not return any value.
+ *
+ * @return void
+ */
 void phase4_init(){
     for(int i = 0; i < MAXPROC; i++){
         procTable[i].pid = -1;
@@ -89,59 +104,70 @@ void phase4_init(){
 
     //Terminal Stuff
     for(int i = 0; i < USLOSS_TERM_UNITS; i++){
-        charRecvMailBox[i] = MboxCreate(1,MAXLINE);
-        charSendMailBox[i] = MboxCreate(1,MAXLINE);
-        lineReadMailBox[i] = MboxCreate(10,MAXLINE);
-        lineWriteMailBox[i] = MboxCreate(10,MAXLINE);
-        pidMailbox[i] = MboxCreate(1,sizeof(int));
+        int usless = USLOSS_DeviceOutput(USLOSS_TERM_DEV, i, (void *)(long)0x2);
+        usless++; // Avoid warning
+        memset(terminalLines[i], '\0', sizeof(terminalLines[i]));
+        terminalLineMbox[i] = 0;
+        terminalReadMbox[i] = MboxCreate(10,MAXLINE);
+        terminalWrite[i] = MboxCreate(1,0);
     }
 
-    // MboxRecv(MainMbox, NULL, 0);
-    // char filename[50];
-    // for(int i = 0; i < USLOSS_TERM_UNITS; i++)
-    // {
-    //     int ctrl = 0;
-    //     ctrl = USLOSS_TERM_CTRL_RECV_INT(ctrl);
-    //     USLOSS_DeviceOutput(USLOSS_TERM_DEV, i, (void *)((long) ctrl));
-    //     // file stuff
-    //     sprintf(filename, "term%d.out", i);
-    //     FILE *f = fopen(filename, "a+");
-    //     fprintf(f, "last line\n");
-    //     fflush(f);
-    //     fclose(f);
-    // }
 }
 
-
+/**
+ * @brief Starts the service processes for Phase 4 of the project.
+ *
+ * This function is responsible for initializing and starting the service processes 
+ * required for the operation of Phase 4. It does not take any arguments and does not 
+ * return any value.
+ *
+ * @return void
+ */
 void phase4_start_service_processes(){
-    char terminalBuffer[10];
     clockDriverPID = fork1("clockDriver", clockDriver, NULL, USLOSS_MIN_STACK, 2);
-    int status;
     if(clockDriverPID < 0){
         USLOSS_Console("startProcesses(): Can't create clockDriver\n");
         USLOSS_Halt(1);
     }
-    for(int i = 0; i < USLOSS_TERM_UNITS; i++){
-        sprintf(terminalBuffer, "%d", i);
-        termProcTable[i][0] = fork1("termDriver", termDriver, terminalBuffer, USLOSS_MIN_STACK, 2);
-        termProcTable[i][1] = fork1("termReader", termReader, terminalBuffer, USLOSS_MIN_STACK, 2);
-        termProcTable[i][2] = fork1("termWriter", termWriter, terminalBuffer, USLOSS_MIN_STACK, 2);
-    }
 
-    // zap(clockDriverPID);
-    // join(&status);
+    for(int i = 0; i < USLOSS_TERM_UNITS; i++){
+        char terminalBuffer[10];
+        char terminalName[64];
+        sprintf(terminalBuffer, "%d", i);
+        sprintf(terminalName, "termDriver %d", i);
+        int usless_pid = fork1(terminalName, termDriver, terminalBuffer, USLOSS_MIN_STACK, 2);
+        usless_pid++; // Avoid warning
+    }
 } 
 
+
+/**
+ * @brief Puts the current process to sleep for a specified number of seconds.
+ *
+ * This function is a system call handler for the sleep operation. It takes a pointer to a 
+ * USLOSS_Sysargs structure as an argument, which contains the arguments passed to the system call.
+ * The number of seconds to sleep is expected to be in the `arg1` field of the USLOSS_Sysargs structure.
+ *
+ * @param args A pointer to a USLOSS_Sysargs structure containing the arguments passed to the system call.
+ * @return void
+ */
 void sleep_sys(USLOSS_Sysargs *args){
     int seconds = (int)(long)args->arg1;
     int result = kernSleep(seconds);
     args->arg4 = (void *)(long)result;
 }
 
+/**
+ * @brief Puts the current process to sleep for a specified number of seconds.
+ *
+ * This function is used to pause the execution of the current process for a certain number of seconds.
+ * It takes an integer as an argument, which represents the number of seconds the process should sleep.
+ * If the number of seconds is less than 0, the function returns -1 indicating an error.
+ *
+ * @param seconds The number of seconds the process should sleep.
+ * @return int Returns 0 if the sleep operation was successful, -1 otherwise.
+ */
 int kernSleep(int seconds){
-    // if(clockDriverPID == -1){
-    //     startClock();
-    // }
     int procPID = getpid();
     if(seconds < 0){
         return -1;
@@ -151,13 +177,21 @@ int kernSleep(int seconds){
     }
     procTable[procPID % MAXPROC].wakeTime =currentTime() + seconds*1000000;
     addHeap(&slHeap, &procTable[procPID % MAXPROC]);
-    // clockDriver("PlaceHolder");
     MboxRecv(procTable[procPID % MAXPROC].mboxID, NULL, 0);
-    // blockMe(21);
     return 0;
 }
 
-
+/**
+ * @brief Handles the terminal write system call.
+ *
+ * This function is a system call handler for the terminal write operation. It takes a pointer to a 
+ * USLOSS_Sysargs structure as an argument, which contains the arguments passed to the system call.
+ * The data to write and the number of bytes to write are expected to be in the `arg1` and `arg2` fields 
+ * of the USLOSS_Sysargs structure, respectively.
+ *
+ * @param args A pointer to a USLOSS_Sysargs structure containing the arguments passed to the system call.
+ * @return void
+ */
 void term_write_sys(USLOSS_Sysargs *args){
     char *buffer = (char *)args->arg1;
     int bufferSize = (int)(long)args->arg2;
@@ -167,18 +201,49 @@ void term_write_sys(USLOSS_Sysargs *args){
     args->arg4 = (void *)(long)result;
     args->arg5 = (void *)(long)numCharsRead;
 }
+
+/**
+ * @brief Writes data to a terminal.
+ *
+ * This function is used to write a specified number of characters from a buffer to a terminal.
+ * It takes a buffer, the size of the buffer, the terminal unit number, and a pointer to an integer 
+ * that will store the number of characters actually written.
+ *
+ * @param buffer A pointer to the buffer containing the data to be written.
+ * @param bufferSize The size of the buffer.
+ * @param unit The terminal unit number to which the data should be written.
+ * @param numCharsRead A pointer to an integer that will store the number of characters actually written.
+ * @return int Returns 0 if the write operation was successful, -1 otherwise.
+ */
 int  kernTermWrite(char *buffer, int bufferSize, int unit,int *numCharsRead){
-    if(unit < 0 || unit > USLOSS_TERM_UNITS -1 || bufferSize < 0){
+    if(unit < 0 || unit >= USLOSS_TERM_UNITS || bufferSize < 0){
         return -1;
     }
-    int pid = getpid();
-    MboxSend(pidMailbox[unit], &pid, sizeof(int));
-    MboxSend(lineWriteMailBox[unit], buffer, bufferSize);
-    MboxRecv(procTable[pid % MAXPROC].mboxID, NULL, 0);
-    blockMe(22);
+    for(int i = 0; i < bufferSize; i++){
+        MboxRecv(terminalWrite[unit], NULL, 0);
+        //Supplement code
+        int cr_val = 0x1;
+        cr_val |= 0x2;
+        cr_val |= 0x4;
+        cr_val |= (buffer[i] << 8);
+
+        int useless = USLOSS_DeviceOutput(USLOSS_TERM_DEV, unit, (void *)(long)cr_val);
+        useless++; // Avoid warning
+    }
     return bufferSize;
 }
 
+/**
+ * @brief Handles the terminal read system call.
+ *
+ * This function is a system call handler for the terminal read operation. It takes a pointer to a 
+ * USLOSS_Sysargs structure as an argument, which contains the arguments passed to the system call.
+ * The buffer to read into and the maximum number of bytes to read are expected to be in the `arg1` 
+ * and `arg2` fields of the USLOSS_Sysargs structure, respectively.
+ *
+ * @param args A pointer to a USLOSS_Sysargs structure containing the arguments passed to the system call.
+ * @return void
+ */
 void term_read_sys(USLOSS_Sysargs *args){
     char *buffer = (char *)args->arg1;
     int bufferSize = (int)(long)args->arg2;
@@ -188,32 +253,48 @@ void term_read_sys(USLOSS_Sysargs *args){
     args->arg4 = (void *)(long)result;
     args->arg2 = (void *)(long)numCharsRead;
 }
+
+/**
+ * @brief Reads data from a terminal.
+ *
+ * This function is used to read a specified number of characters from a terminal into a buffer.
+ * It takes a buffer, the size of the buffer, the terminal unit number, and a pointer to an integer 
+ * that will store the number of characters actually read.
+ *
+ * @param buffer A pointer to the buffer where the read data should be stored.
+ * @param bufferSize The size of the buffer.
+ * @param unit The terminal unit number from which the data should be read.
+ * @param numCharsRead A pointer to an integer that will store the number of characters actually read.
+ * @return int Returns 0 if the read operation was successful, -1 otherwise.
+ */
 int  kernTermRead (char *buffer, int bufferSize, int unit,int *numCharsRead){
     if(unit < 0 || unit > USLOSS_TERM_UNITS -1 || bufferSize <= 0){
         return -1;
     }
     char line[MAXLINE];
-    int ctrl = 0;
 
-    if(termInterrupt[unit] == 0){
-        ctrl = USLOSS_TERM_CTRL_RECV_INT(ctrl);
-        USLOSS_DeviceOutput(USLOSS_TERM_DEV, unit, (void *)(long)ctrl);
-        termInterrupt[unit] = 1;
-    }
-    int ret = MboxRecv(lineReadMailBox[unit], &line, MAXLINE);
-    // line[ret] = '\0';
+    int ret = MboxRecv(terminalReadMbox[unit], &line, MAXLINE);
     if(ret > bufferSize){
         ret = bufferSize;
         
     }
-    // memcpy(buffer, line, ret);
-    strncpy(buffer, line, ret);
-    // buffer[ret] = '\0';
+    memcpy(buffer, line, ret);
     *numCharsRead = ret;
-    // dumpProcesses();
     return 0;
 }
 
+/**
+ * @brief Handles the disk size system call.
+ *
+ * This function is a system call handler for the disk size operation. It takes a pointer to a 
+ * USLOSS_Sysargs structure as an argument, which contains the arguments passed to the system call.
+ * The disk unit number is expected to be in the `arg1` field of the USLOSS_Sysargs structure.
+ * The function fills the `arg2`, `arg3`, and `arg4` fields of the USLOSS_Sysargs structure with 
+ * the sector size, the number of sectors, and the number of tracks on the disk, respectively.
+ *
+ * @param args A pointer to a USLOSS_Sysargs structure containing the arguments passed to the system call.
+ * @return void
+ */
 void disk_size_sys(USLOSS_Sysargs *args){
     int unit = (int)(long)args->arg1;
     int sector = 0;
@@ -225,11 +306,37 @@ void disk_size_sys(USLOSS_Sysargs *args){
     args->arg3 = (void *)(long)disk;
     args->arg4 = (void *)(long)result;
 }
+
+/**
+ * @brief Retrieves the size of a disk.
+ *
+ * This function is used to get the size of a specified disk unit. It takes the disk unit number 
+ * and pointers to integers that will store the sector size, the number of tracks, and the number 
+ * of sectors on the disk.
+ *
+ * @param unit The disk unit number.
+ * @param sector A pointer to an integer that will store the sector size.
+ * @param track A pointer to an integer that will store the number of tracks.
+ * @param disk A pointer to an integer that will store the number of sectors.
+ * @return int Returns 0 if the operation was successful, -1 otherwise.
+ */
 int kernDiskSize (int unit, int *sector, int *track, int *disk){
     USLOSS_Console("kernDiskSize: called\n");
     return 0;
 }
 
+/**
+ * @brief Handles the disk write system call.
+ *
+ * This function is a system call handler for the disk write operation. It takes a pointer to a 
+ * USLOSS_Sysargs structure as an argument, which contains the arguments passed to the system call.
+ * The buffer to write from, the number of sectors to write, the track number, the first sector number, 
+ * and the disk unit number are expected to be in the `arg1`, `arg2`, `arg3`, `arg4`, and `arg5` fields 
+ * of the USLOSS_Sysargs structure, respectively.
+ *
+ * @param args A pointer to a USLOSS_Sysargs structure containing the arguments passed to the system call.
+ * @return void
+ */
 void disk_write_sys(USLOSS_Sysargs *args){
     void *diskBuffer = (void *)args->arg1;
     int unit = (int)(long)args->arg2;
@@ -241,11 +348,40 @@ void disk_write_sys(USLOSS_Sysargs *args){
     args->arg1 = (void *)(long)status;
     args->arg4 = (void *)(long)result;
 }
+
+/**
+ * @brief Writes data to a disk.
+ *
+ * This function is used to write a specified number of sectors from a buffer to a disk.
+ * It takes a buffer, the disk unit number, the track number, the first sector number, 
+ * the number of sectors to write, and a pointer to an integer that will store the status 
+ * of the write operation.
+ *
+ * @param diskBuffer A pointer to the buffer containing the data to be written.
+ * @param unit The disk unit number to which the data should be written.
+ * @param track The track number where the writing should start.
+ * @param first The first sector number where the writing should start.
+ * @param sectors The number of sectors to write.
+ * @param status A pointer to an integer that will store the status of the write operation.
+ * @return int Returns 0 if the write operation was successful, -1 otherwise.
+ */
 int kernDiskWrite(void *diskBuffer, int unit, int track, int first,int sectors, int *status){
     USLOSS_Console("kernDiskWrite: called\n");
     return 0;
 }
 
+/**
+ * @brief Handles the disk read system call.
+ *
+ * This function is a system call handler for the disk read operation. It takes a pointer to a 
+ * USLOSS_Sysargs structure as an argument, which contains the arguments passed to the system call.
+ * The buffer to read into, the number of sectors to read, the track number, the first sector number, 
+ * and the disk unit number are expected to be in the `arg1`, `arg2`, `arg3`, `arg4`, and `arg5` fields 
+ * of the USLOSS_Sysargs structure, respectively.
+ *
+ * @param args A pointer to a USLOSS_Sysargs structure containing the arguments passed to the system call.
+ * @return void
+ */
 void disk_read_sys(USLOSS_Sysargs *args){
     void *diskBuffer = (void *)args->arg1;
     int unit = (int)(long)args->arg2;
@@ -257,17 +393,45 @@ void disk_read_sys(USLOSS_Sysargs *args){
     args->arg1 = (void *)(long)status;
     args->arg4 = (void *)(long)result;
 }
+
+/**
+ * @brief Reads data from a disk.
+ *
+ * This function is used to read a specified number of sectors from a disk into a buffer.
+ * It takes a buffer, the disk unit number, the track number, the first sector number, 
+ * the number of sectors to read, and a pointer to an integer that will store the status 
+ * of the read operation.
+ *
+ * @param diskBuffer A pointer to the buffer where the read data should be stored.
+ * @param unit The disk unit number from which the data should be read.
+ * @param track The track number where the reading should start.
+ * @param first The first sector number where the reading should start.
+ * @param sectors The number of sectors to read.
+ * @param status A pointer to an integer that will store the status of the read operation.
+ * @return int Returns 0 if the read operation was successful, -1 otherwise.
+ */
 int kernDiskRead (void *diskBuffer, int unit, int track, int first,int sectors, int *status){
     USLOSS_Console("kernDiskRead: called\n");
     return 0;
 }
 
 //-------------Daemon Functions------------------//
+
+/**
+ * @brief The clock driver function.
+ *
+ * This function is a driver for the clock. It is typically run as a separate process, 
+ * and it is responsible for handling clock interrupts and performing any necessary 
+ * actions. It takes a single argument, which can be used to pass data to the driver.
+ *
+ * @param arg A pointer to data that can be used by the driver.
+ * @return int Returns 0 if the driver function completed successfully, -1 otherwise.
+ */
 static int clockDriver(char *arg){
-    int res;
     int status;
     // MboxSend(MainMbox, NULL, 0);
-    USLOSS_PsrSet(USLOSS_PsrGet() | USLOSS_PSR_CURRENT_INT);
+    int useless = USLOSS_PsrSet(USLOSS_PsrGet() | USLOSS_PSR_CURRENT_INT);
+    useless++; // Avoid warning
     while(!isZapped()){
         waitDevice(USLOSS_CLOCK_DEV, 0, &status);
         procStruct * proc;
@@ -281,103 +445,86 @@ static int clockDriver(char *arg){
     return 0;
 }
 
-
+/**
+ * @brief The terminal driver function.
+ *
+ * This function is a driver for the terminal. It is typically run as a separate process, 
+ * and it is responsible for handling terminal interrupts and performing any necessary 
+ * actions. It takes a single argument, which can be used to pass data to the driver.
+ *
+ * @param args A pointer to data that can be used by the driver.
+ * @return int Returns 0 if the driver function completed successfully, -1 otherwise.
+ */
 static int termDriver(char *args){
-    // USLOSS_Console("termDriver: called\n");
     int status;
-    int unit = atoi((char *)args);
+    int unit = atoi(args);
     while(!isZapped()){
-        waitDevice(USLOSS_TERM_INT, unit, &status);
-        int recv = USLOSS_TERM_STAT_RECV(status);
-        if(recv == USLOSS_DEV_BUSY){
-            MboxCondSend(charRecvMailBox[unit], &status, sizeof(int));
+        int Xmit = USLOSS_TERM_STAT_XMIT(status);
+        if(Xmit == USLOSS_DEV_READY){
+            MboxCondSend(terminalWrite[unit], NULL, 0);
         }
-        int xmit = USLOSS_TERM_STAT_XMIT(status);
-        if(xmit == USLOSS_DEV_READY){
-            MboxCondSend(charSendMailBox[unit], &status, sizeof(int));
+        else if(Xmit == USLOSS_DEV_ERROR){
+            USLOSS_Console("termDriver: Error\n");
+            USLOSS_Halt(1);
         }
-    }
-    return 0;
-}
 
-static int termReader(char *args){
-    int unit = atoi((char *)args);
-    int i, recv, next = 0;
-    char buff[MAXLINE];
-    for(i = 0; i < MAXLINE; i++){
-        buff[i] = '\0';
-    }
-    while(!isZapped()){
-        MboxRecv(charRecvMailBox[unit], &recv, sizeof(int));
-        char c = USLOSS_TERM_STAT_CHAR(recv);
-        buff[next] = c;
-        next++;
+        waitDevice(USLOSS_TERM_DEV, unit, &status);
+        int stat = USLOSS_TERM_STAT_RECV(status);
 
-        if(c == '\n' || next == MAXLINE){
-            buff[next] = '\0';
-            MboxCondSend(lineReadMailBox[unit], buff, next);
-            next = 0;
-            for(i = 0; i < MAXLINE; i++){
-                buff[i] = '\0';
+        if(stat == USLOSS_DEV_BUSY){
+            char ch = USLOSS_TERM_STAT_CHAR(status);
+            if(ch == '\n' || terminalLineMbox[unit] == MAXLINE){
+                if(terminalLineMbox[unit] != MAXLINE){
+                    terminalLines[unit][terminalLineMbox[unit]] = ch;
+                    terminalLineMbox[unit]++;
+                }
+                char retLine[terminalLineMbox[unit]];
+                memset(retLine, '\0', sizeof(retLine));
+                for(int i = 0; i < terminalLineMbox[unit]; i++){
+                    retLine[i] = terminalLines[unit][i];
+                }
+                MboxSend(terminalReadMbox[unit], retLine, terminalLineMbox[unit]);
+                
+                memset(terminalLines[unit], '\0', sizeof(terminalLines[unit]));
+                terminalLineMbox[unit] = 0;
+            }else{
+                terminalLines[unit][terminalLineMbox[unit]] = ch;
+                terminalLineMbox[unit]++;
             }
+        }else if(stat == USLOSS_DEV_ERROR){
+            USLOSS_Console("termDriver: Error\n");
+            USLOSS_Halt(1);
         }
     }
-    return 0;
-}
-
-static int termWriter(char *args){
-    int unit = atoi((char *)args);
-    int size,next,status,ctrl = 0;
-    
-    char filename[50];
-    sprintf(filename, "term%d.out", unit);
-    FILE *f = fopen(filename, "r+");
-    
-    char buff[MAXLINE];
-    while(!isZapped()){
-        size = MboxRecv(lineWriteMailBox[unit], buff, MAXLINE);
-        ctrl = USLOSS_TERM_CTRL_XMIT_INT(1);
-        USLOSS_DeviceOutput(USLOSS_TERM_DEV, unit, (void *)(long)ctrl);
-        next = 0;
-        while(next < size){
-            MboxRecv(charSendMailBox[unit], &status, sizeof(int));
-            int temp = USLOSS_TERM_STAT_XMIT(status);
-            if(temp != USLOSS_DEV_READY){
-                ctrl = 0;
-                ctrl = USLOSS_TERM_CTRL_CHAR(ctrl,buff[next]);
-                ctrl = USLOSS_TERM_CTRL_XMIT_CHAR(ctrl);
-                ctrl = USLOSS_TERM_CTRL_XMIT_INT(ctrl);
-                USLOSS_DeviceOutput(USLOSS_TERM_DEV, unit, (void *)(long)ctrl);
-            }
-            if(buff[next] == 0x00){
-                continue;
-            }
-            fwrite(&buff[next], sizeof(char), 1, f);
-            fflush(f);
-            
-            next++;
-        }
-        ctrl = 0;
-        if(termInterrupt[unit] == 1){
-            ctrl = USLOSS_TERM_CTRL_RECV_INT(ctrl);
-        }
-        USLOSS_DeviceOutput(USLOSS_TERM_DEV, unit, (void *)(long)ctrl);
-        termInterrupt[unit] = 0;
-        int pid;
-        MboxRecv(pidMailbox[unit], &pid, sizeof(int));
-        MboxSend(procTable[pid % MAXPROC].mboxID, NULL, 0);
-        unblockProc(pid);
-    }
-    fclose(f);
     return 0;
 }
 //-------------Utility Functions------------------//
+
+/**
+ * @brief Initializes a process.
+ *
+ * This function is used to initialize a process with a given process ID (pid). 
+ * It sets up any necessary data structures and configurations for the process.
+ *
+ * @param pid The process ID of the process to be initialized.
+ * @return void
+ */
 void init_proc(int pid){
     procTable[pid].pid = pid;
     procTable[pid].mboxID = MboxCreate(0,0);
     procTable[pid].wakeTime = -1;
 }
 
+/**
+ * @brief Initializes a process heap.
+ *
+ * This function is used to initialize a process heap. It sets up any necessary 
+ * data structures and configurations for the heap. It takes a pointer to a procHeap 
+ * structure as an argument.
+ *
+ * @param heap A pointer to a procHeap structure representing the heap to be initialized.
+ * @return void
+ */
 void initHeap(procHeap * heap){
     heap->size = 0;
     for(int i = 0; i < MAXPROC; i++){
@@ -385,6 +532,17 @@ void initHeap(procHeap * heap){
     }
 }
 
+/**
+ * @brief Adds a process to a process heap.
+ *
+ * This function is used to add a process to a process heap. It takes a pointer to a procHeap 
+ * structure and a pointer to a procStruct structure as arguments. The procStruct represents 
+ * the process to be added to the heap.
+ *
+ * @param heap A pointer to a procHeap structure representing the heap.
+ * @param proc A pointer to a procStruct structure representing the process to be added.
+ * @return void
+ */
 void addHeap(procHeap * heap, procStruct * proc){
     int i,parent;
     // USLOSS_Console("addHeap: Procces PID: %d\n", proc->pid);
@@ -399,6 +557,16 @@ void addHeap(procHeap * heap, procStruct * proc){
     heap->size++;
 }
 
+/**
+ * @brief Removes a process from a process heap.
+ *
+ * This function is used to remove a process from a process heap. It takes a pointer to a procHeap 
+ * structure as an argument. The function returns a pointer to the procStruct structure representing 
+ * the process that was removed from the heap.
+ *
+ * @param heap A pointer to a procHeap structure representing the heap.
+ * @return procStruct* A pointer to the procStruct structure representing the process that was removed.
+ */
 procStruct * removeHeap(procHeap * heap){
     if(heap->size == 0){
         return NULL;
@@ -425,11 +593,20 @@ procStruct * removeHeap(procHeap * heap){
         heap->HeapProc[min] = temp;
         i = min;
     }
-    // USLOSS_Console("removeHeap: Procces PID: %d\n", ret->pid);
     return ret;
 
 }
 
+/**
+ * @brief Peeks at the top process in a process heap.
+ *
+ * This function is used to get a reference to the process at the top of a process heap without 
+ * removing it. It takes a pointer to a procHeap structure as an argument. The function returns 
+ * a pointer to the procStruct structure representing the process at the top of the heap.
+ *
+ * @param heap A pointer to a procHeap structure representing the heap.
+ * @return procStruct* A pointer to the procStruct structure representing the process at the top of the heap.
+ */
 procStruct * peekHeap(procHeap * heap){
     return heap->HeapProc[0];
 }

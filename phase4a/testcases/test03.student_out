@@ -2,30 +2,10 @@ phase5_start_service_processes() called -- currently a NOP
 start4(): started
 XXterm2(): started
 XXterm2(): reading a line from terminal 2
- PID  PPID  NAME              PRIORITY  STATE
-   1     0  init              6         Blocked(waiting for child to quit)
-   2     1  clockDriver       2         Blocked(11)
-   3     1  termDriver        2         Blocked(11)
-   4     1  termReader        2         Blocked(11)
-   5     1  termWriter        2         Blocked(11)
-   6     1  termDriver        2         Blocked(11)
-   7     1  termReader        2         Blocked(11)
-   8     1  termWriter        2         Blocked(11)
-   9     1  termDriver        2         Blocked(11)
-  10     1  termReader        2         Blocked(11)
-  11     1  termWriter        2         Blocked(11)
-  12     1  termDriver        2         Blocked(11)
-  13     1  termReader        2         Blocked(11)
-  14     1  termWriter        2         Blocked(11)
-  15     1  sentinel          7         Runnable
-  16     1  testcase_main     3         Blocked(waiting for child to quit)
-  17    16  testcase_timeout  5         Blocked(13)
-  18    16  start4            3         Blocked(waiting for child to quit)
-  19    18  XXterm2           4         Running
 XXterm2(): after TermRead()
 XXterm2(): term2 read   50 bytes (hex):  74 77 6f 3a 20 66 69 72 73 74 20 6c 69 6e 65 20 20 20 28 74 68 69 72 64 20 6c 6f 6e 67 65 73 74 20 6c 69 6e 65 20 6f 66 20 74 68 65 20 73 65 74 29 0a
                  strlen 50 buf  (text): 'two: first line   (third longest line of the set)
 '
 XXterm2(): Terminating
-ERROR: Someone attempted to call dumpProcesses while in user mode!
+start4(): XXterm2 completed. kidpid = 11, pid = 11
 finish(): The simulation is now terminating.

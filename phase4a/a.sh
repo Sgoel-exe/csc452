@@ -1,6 +1,6 @@
 #! /bin/bash
 
-ls -1 testcases/test06.c | cut -f2 -d'/' | cut -f1 -d'.' | while read line
+ls -1 testcases/test07.c | cut -f2 -d'/' | cut -f1 -d'.' | while read line
 do
   echo "TESTCASE $line"
 

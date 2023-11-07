@@ -41,7 +41,6 @@ int Child1(char *arg)
 {
     char buffer[MAXLINE];
     int  result, size;
-
     sprintf(buffer, "A Something interesting to print here...\n");
     result = TermWrite(buffer, strlen(buffer), 1, &size);
 
