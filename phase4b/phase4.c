@@ -424,7 +424,6 @@ void disk_write_sys(USLOSS_Sysargs *args){
  * @return int Returns 0 if the write operation was successful, -1 otherwise.
  */
 int kernDiskWrite(void *diskBuffer, int unit, int track, int first,int sectors, int *status){
-    // USLOSS_Console("kernDiskWrite: unit = %d, track = %d, first = %d, sectors = %d\n", unit, track, first, sectors);
     if(unit != 1 && unit != 0){
         return -1;
     }
@@ -435,7 +434,6 @@ int kernDiskWrite(void *diskBuffer, int unit, int track, int first,int sectors, 
     if(first < 0 || first >= USLOSS_DISK_TRACK_SIZE){
         return -1;
     }
-    // USLOSS_Console("kernDiskWrite: %s\n", &diskBuffer[2*512]);
     int pid = getpid();
     int CurrentMbox = unit == 0 ? disk0[DISK_MBOX] : disk1[DISK_MBOX];
     int CurrentQMbox = unit == 0 ? disk0[DISK_Q_MBOX] : disk1[DISK_Q_MBOX];
@@ -453,7 +451,7 @@ int kernDiskWrite(void *diskBuffer, int unit, int track, int first,int sectors, 
     diskQueue(unit, pid);
     MboxRecv(CurrentQMbox, NULL, 0);
     MboxCondSend(CurrentMbox, NULL, 0);
-    MboxCondRecv(diskTable[index].mboxID, NULL, 0);
+    MboxRecv(diskTable[index].mboxID, NULL, 0);
     status = 0;
     return 0;
 }
@@ -508,9 +506,8 @@ int kernDiskRead (void *diskBuffer, int unit, int track, int first,int sectors, 
     diskTable[index].track = track;
     diskTable[index].first = first;
     diskTable[index].sectors = sectors;
-    USLOSS_Console("diskReader: %s\n", diskTable[index].diskBuffer);
-    diskTable[index].diskBuffer = diskBuffer;
     strcpy(diskBuffer, diskTable[index].diskBuffer);
+    diskTable[index].diskBuffer = diskBuffer;
     diskTable[index].op = USLOSS_DISK_READ;
 
     MboxSend(CurrentQMbox, NULL, 0);
@@ -606,7 +603,6 @@ static int termDriver(char *args){
 static int diskDriver(char *args){
     int currentMbox, currentQMbox, currentMut, currentMutTrack;
     int unit;
-    int result;
     int status;
     diskReqQ** diskPtr = NULL;
     diskReqQ* diskReq = NULL;
@@ -634,7 +630,7 @@ static int diskDriver(char *args){
     int useless = USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &req);
     useless++; // Avoid warning
     waitDevice(USLOSS_DISK_DEV, unit, &status);
-    if(unit = 0){
+    if(unit == 0){
         disk0[DISK_NUM_TRACKS] = CurrentDisk;
     }
     else{
@@ -684,7 +680,6 @@ static int diskDriver(char *args){
 
 //-------------Disk Helper Functions---------------//
 int diskSeek(int unit, int track){
-    int res;
     int status;
     int CurrentMbox = unit == 0 ? disk0[DISK_MBOX] : disk1[DISK_MBOX];
 
@@ -696,6 +691,7 @@ int diskSeek(int unit, int track){
     useless++; // Avoid warning
     waitDevice(USLOSS_DISK_DEV, unit, &status);
     MboxRecv(CurrentMbox, NULL, 0);
+    return 0;
 }
 
 void diskQueue(int unit, int pid){
@@ -793,7 +789,6 @@ void initHeap(procHeap * heap){
  */
 void addHeap(procHeap * heap, procStruct * proc){
     int i,parent;
-    // USLOSS_Console("addHeap: Procces PID: %d\n", proc->pid);
     for(i = heap->size; i > 0; i = parent){
         parent = (i-1)/2;
         if(heap->HeapProc[parent]->wakeTime <= proc->wakeTime){
