@@ -34,6 +34,7 @@ int start4(char *arg)
     strcpy(&sectors[1 * 512], "Does it work?");
     strcpy(&sectors[2 * 512], "One last chance");
     result = DiskWrite((char *) sectors, 0, 4, 2, 3, &status);
+    USLOSS_Console("start4(): DiskWrite returned %d, status %d\n", result, status);
     assert(result == 0);
     assert(status == 0);
 

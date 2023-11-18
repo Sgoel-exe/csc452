@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "c:/Users/Shreygoel/Desktop/csc452/phase4a",
-      "program": "c:/Users/Shreygoel/Desktop/csc452/phase4a/build/Debug/outDebug",
+      "cwd": "c:/Users/Shreygoel/Desktop/csc452/phase4b",
+      "program": "c:/Users/Shreygoel/Desktop/csc452/phase4b/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [

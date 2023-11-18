@@ -31,6 +31,18 @@ typedef struct procHeap{
     procStruct * HeapProc[MAXPROC];
 }procHeap;
 
+typedef struct diskReqQ diskReqQ;
+
+struct diskReqQ{
+    int pid;
+    int track;
+    int first;
+    int sectors;
+    void *diskBuffer;
+    int op;
+    int mboxID;
+    diskReqQ * next;
+};
 
 //-------------Function Prototypes------------------//
 void phase4_init();
@@ -52,7 +64,12 @@ int kernDiskRead (void *diskBuffer, int unit, int track, int first,int sectors, 
 //Daemon Functions
 static int clockDriver(char *arg);
 static int termDriver(char *args);
-
+static int diskDriver(char *args);
+//Disk Helper Functions
+int diskReader(int unit, int track, int first, int sectors, void* buffer);
+int diskWrite(int unit, int track, int first, int sectors, void* buffer);
+int diskSeek(int unit, int track);
+void diskQueue(int unit, int pid);
 //Utility Functions
 void init_proc(int pid);
 void initHeap(procHeap * heap);
@@ -60,6 +77,13 @@ void addHeap(procHeap * heap, procStruct * proc);
 procStruct * removeHeap(procHeap * heap);
 procStruct * peekHeap(procHeap * heap);
 
+// CONSTANTS
+#define DISK_MBOX 0 // 1 mailbox for disk
+#define DISK_Q_MBOX 1 // 1 mailbox for disk queue
+#define DISK_MUT 2 // 1 mutex each
+#define DISK_MUT_TRACK 3 // 1 mutex per track
+#define DISK_NUM_TRACKS 4
+#define DISK_MBOX_SIZE 5 // 4 mailboxes for disk
 
 //-------------Global Variables------------------//
 procStruct procTable[MAXPROC];
@@ -71,8 +95,14 @@ int terminalLines[USLOSS_TERM_UNITS][MAXLINE];
 int terminalLineMbox[USLOSS_TERM_UNITS];
 int terminalReadMbox[USLOSS_TERM_UNITS];
 int terminalWrite[USLOSS_TERM_UNITS];
-int writeLock;
-// static int lock = 1;
+
+//Disk Stuff
+diskReqQ diskTable[MAXPROC];
+int disk0[DISK_MBOX_SIZE];
+int disk1[DISK_MBOX_SIZE];
+int CurrentDisk;
+diskReqQ * disk0Req = NULL;
+diskReqQ * disk1Req = NULL;
 
 //-------------Function Implementations------------------//
 
@@ -110,7 +140,20 @@ void phase4_init(){
         terminalReadMbox[i] = MboxCreate(10,MAXLINE);
         terminalWrite[i] = MboxCreate(1,0);
     }
-    writeLock = MboxCreate(1,0);
+
+    //Disk Stuff
+    for(int i = 0; i < MAXPROC; i++){
+        diskTable[i].pid = -1;
+        diskTable[i].next = NULL;
+        diskTable[i].mboxID = MboxCreate(1,0);;   
+    }
+
+    for(int i = 0; i < DISK_MBOX_SIZE - 1; i++){
+        disk0[i] = MboxCreate(1,0);
+        disk1[i] = MboxCreate(1,0);
+    }
+    disk0Req = NULL;
+    disk1Req = NULL;
 
 }
 
@@ -138,7 +181,15 @@ void phase4_start_service_processes(){
         int usless_pid = fork1(terminalName, termDriver, terminalBuffer, USLOSS_MIN_STACK, 2);
         usless_pid++; // Avoid warning
     }
-    // MboxCondSend(writeLock, NULL, 0);
+
+    for(int i = 0; i < USLOSS_DISK_UNITS; i++){
+        char diskBuffer[10];
+        char diskName[64];
+        sprintf(diskBuffer, "%d", i);
+        sprintf(diskName, "diskDriver %d", i);
+        int usless_pid = fork1(diskName, diskDriver, diskBuffer, USLOSS_MIN_STACK, 2);
+        usless_pid++; // Avoid warning
+    }
 } 
 
 
@@ -322,7 +373,15 @@ void disk_size_sys(USLOSS_Sysargs *args){
  * @return int Returns 0 if the operation was successful, -1 otherwise.
  */
 int kernDiskSize (int unit, int *sector, int *track, int *disk){
-    USLOSS_Console("kernDiskSize: called\n");
+    int tempTrack = -1;
+    if(unit < 0 || unit > USLOSS_DISK_UNITS -1){
+        return -1;
+    }
+    tempTrack = unit == 0 ? disk0[DISK_MUT_TRACK] : disk1[DISK_MUT_TRACK];
+    MboxRecv(tempTrack, NULL, 0);
+    *sector = USLOSS_DISK_SECTOR_SIZE;
+    *track = USLOSS_DISK_TRACK_SIZE;
+    *disk = CurrentDisk;
     return 0;
 }
 
@@ -340,10 +399,10 @@ int kernDiskSize (int unit, int *sector, int *track, int *disk){
  */
 void disk_write_sys(USLOSS_Sysargs *args){
     void *diskBuffer = (void *)args->arg1;
-    int unit = (int)(long)args->arg2;
+    int unit = (int)(long)args->arg5;
     int track = (int)(long)args->arg3;
     int first = (int)(long)args->arg4;
-    int sectors = (int)(long)args->arg5;
+    int sectors = (int)(long)args->arg2;
     int status = 0;
     int result = kernDiskWrite(diskBuffer, unit, track, first, sectors, &status);
     args->arg1 = (void *)(long)status;
@@ -367,7 +426,18 @@ void disk_write_sys(USLOSS_Sysargs *args){
  * @return int Returns 0 if the write operation was successful, -1 otherwise.
  */
 int kernDiskWrite(void *diskBuffer, int unit, int track, int first,int sectors, int *status){
-    USLOSS_Console("kernDiskWrite: called\n");
+    // USLOSS_Console("kernDiskWrite: unit = %d, track = %d, first = %d, sectors = %d\n", unit, track, first, sectors);
+    if(unit != 1 && unit != 0){
+        return -1;
+    }
+    int numTracks = unit == 0 ? 16 : 32;
+    if(track < 0 || track >= numTracks){
+        return -1;
+    }
+    if(first < 0 || first >= USLOSS_DISK_TRACK_SIZE){
+        return -1;
+    }
+    status = diskWrite(unit, track, first, sectors, diskBuffer);
     return 0;
 }
 
@@ -385,10 +455,10 @@ int kernDiskWrite(void *diskBuffer, int unit, int track, int first,int sectors, 
  */
 void disk_read_sys(USLOSS_Sysargs *args){
     void *diskBuffer = (void *)args->arg1;
-    int unit = (int)(long)args->arg2;
+    int unit = (int)(long)args->arg5;
     int track = (int)(long)args->arg3;
     int first = (int)(long)args->arg4;
-    int sectors = (int)(long)args->arg5;
+    int sectors = (int)(long)args->arg2;
     int status = 0;
     int result = kernDiskRead(diskBuffer, unit, track, first, sectors, &status);
     args->arg1 = (void *)(long)status;
@@ -412,7 +482,7 @@ void disk_read_sys(USLOSS_Sysargs *args){
  * @return int Returns 0 if the read operation was successful, -1 otherwise.
  */
 int kernDiskRead (void *diskBuffer, int unit, int track, int first,int sectors, int *status){
-    USLOSS_Console("kernDiskRead: called\n");
+    status = diskReader(unit, track, first, sectors, diskBuffer);
     return 0;
 }
 
@@ -495,6 +565,194 @@ static int termDriver(char *args){
         }
     }
     return 0;
+}
+
+static int diskDriver(char *args){
+    int currentMbox, currentQMbox, currentMut, currentMutTrack;
+    int unit;
+    int result;
+    int status;
+    diskReqQ** diskPtr = NULL;
+    diskReqQ* diskReq = NULL;
+    USLOSS_DeviceRequest req;
+
+    if(*args == '0'){
+        currentMbox = disk0[DISK_MBOX];
+        currentQMbox = disk0[DISK_Q_MBOX];
+        currentMut = disk0[DISK_MUT];
+        currentMutTrack = disk0[DISK_MUT_TRACK];
+        unit = 0;
+        diskPtr = &disk0Req;
+    }
+    else{
+        currentMbox = disk1[DISK_MBOX];
+        currentQMbox = disk1[DISK_Q_MBOX];
+        currentMut = disk1[DISK_MUT];
+        currentMutTrack = disk1[DISK_MUT_TRACK];
+        unit = 1;
+        diskPtr = &disk1Req;
+    }
+
+    req.opr = USLOSS_DISK_TRACKS;
+    req.reg1 = (void *)(long)&CurrentDisk;
+    int useless = USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &req);
+    useless++; // Avoid warning
+    waitDevice(USLOSS_DISK_DEV, unit, &status);
+    if(unit = 0){
+        disk0[DISK_NUM_TRACKS] = CurrentDisk;
+    }
+    else{
+        disk1[DISK_NUM_TRACKS] = CurrentDisk;
+    }
+    MboxSend(currentMutTrack, NULL, 0);
+    while(!isZapped()){
+        MboxRecv(currentMbox, NULL, 0);
+        while(*diskPtr != NULL){
+            diskReq = *diskPtr;
+            int mboxID = diskReq->mboxID;
+            int track = diskReq->track;
+            int first = diskReq->first;
+            int sectors = diskReq->sectors;
+            void *diskBuffer = diskReq->diskBuffer;
+            int op = diskReq->op;
+            diskSeek(unit, track);
+            req.opr = op;
+            req.reg1 = (void *)(long)first;
+            req.reg2 = (void *)(long)diskBuffer;
+            for(int i = 0; i < sectors; i++){
+                int temp = (int)(long)req.reg1;
+                if(temp == USLOSS_DISK_TRACK_SIZE){
+                    req.reg1 = (void *)(long)0;
+                    track++;
+                    diskSeek(unit, track);
+                }
+                MboxSend(currentMut, NULL, 0);
+                useless = USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &req);
+                useless++; // Avoid warning
+                waitDevice(USLOSS_DISK_DEV, unit, &status);
+                MboxRecv(currentMut, NULL, 0);
+                req.reg1 = (void *)(long)(temp + 1);
+                req.reg2 = (void *)(long)((char *)req.reg2 + USLOSS_DISK_SECTOR_SIZE);
+            }
+            MboxSend(currentQMbox, NULL, 0);
+            *diskPtr = (*diskPtr)->next;
+            diskReq->next = NULL;
+            MboxRecv(currentQMbox, NULL, 0);
+            MboxSend(mboxID, NULL, 0);
+        }
+    }
+    return 0;
+}
+
+//-------------Disk Helper Functions---------------//
+int diskReader(int unit, int track, int first, int sectors, void* buffer){
+    int pid = getpid();
+    int CurrentMbox = unit == 0 ? disk0[DISK_MBOX] : disk1[DISK_MBOX];
+    int CurrentQMbox = unit == 0 ? disk0[DISK_Q_MBOX] : disk1[DISK_Q_MBOX];
+
+    int index = pid % MAXPROC;
+    diskTable[index].pid = pid;
+    diskTable[index].track = track;
+    diskTable[index].first = first;
+    diskTable[index].sectors = sectors;
+    // USLOSS_Console("diskReader: %s\n", diskTable[index].diskBuffer);
+    strcpy(buffer, diskTable[index].diskBuffer);
+    diskTable[index].op = USLOSS_DISK_READ;
+
+    MboxSend(CurrentQMbox, NULL, 0);
+    diskQueue(unit, pid);
+    MboxRecv(CurrentQMbox, NULL, 0);
+    MboxCondSend(CurrentMbox, NULL, 0);
+    MboxRecv(diskTable[index].mboxID, NULL, 0);
+    return 0;
+}
+
+int diskWrite(int unit, int track, int first, int sectors, void* buffer){
+    int pid = getpid();
+    int CurrentMbox = unit == 0 ? disk0[DISK_MBOX] : disk1[DISK_MBOX];
+    int CurrentQMbox = unit == 0 ? disk0[DISK_Q_MBOX] : disk1[DISK_Q_MBOX];
+
+    int index = pid % MAXPROC;
+    diskTable[index].pid = pid;
+    diskTable[index].track = track;
+    diskTable[index].first = first;
+    diskTable[index].sectors = sectors;
+    // strcpy(diskTable[index].diskBuffer, buffer);
+    // USLOSS_Console("diskWrite: %s\n", buffer);
+    diskTable[index].diskBuffer = buffer;
+    diskTable[index].op = USLOSS_DISK_WRITE;
+
+    MboxSend(CurrentQMbox, NULL, 0);
+    diskQueue(unit, pid);
+    MboxRecv(CurrentQMbox, NULL, 0);
+    MboxCondSend(CurrentMbox, NULL, 0);
+    MboxRecv(diskTable[index].mboxID, NULL, 0);
+    // USLOSS_Console("diskWrite: Sending to disk\n");
+    return 0;
+}
+
+int diskSeek(int unit, int track){
+    int res;
+    int status;
+    int CurrentMbox = unit == 0 ? disk0[DISK_MBOX] : disk1[DISK_MBOX];
+
+    USLOSS_DeviceRequest req;
+    req.opr = USLOSS_DISK_SEEK;
+    req.reg1 = (void *)(long)track;
+    MboxSend(CurrentMbox, NULL, 0);
+    int useless = USLOSS_DeviceOutput(USLOSS_DISK_DEV, unit, &req);
+    useless++; // Avoid warning
+    waitDevice(USLOSS_DISK_DEV, unit, &status);
+    MboxRecv(CurrentMbox, NULL, 0);
+}
+
+void diskQueue(int unit, int pid){
+    diskReqQ * temp = NULL;
+    if(unit == 0){
+        if(disk0Req == NULL){
+            disk0Req = &diskTable[pid % MAXPROC];
+            return;
+        }
+        else{
+            temp = disk0Req;
+        }
+    }
+    else{
+        if(disk1Req == NULL){
+            disk1Req = &diskTable[pid % MAXPROC];
+            return;
+        }
+        else{
+            temp = disk1Req;
+        }
+    }
+    int index = pid % MAXPROC;
+    int currentTrack = temp->track;
+    int lastTrack = diskTable[index].track;
+    if(currentTrack <= lastTrack){
+        while(temp->next != NULL && temp->next->track <= currentTrack && temp->next->track >= lastTrack){
+            temp = temp->next;
+        }
+        diskTable[index].next = temp->next;
+        temp->next = &diskTable[index];
+        return;
+    }else{
+        while(temp->next != NULL && temp->next->track >= currentTrack){
+            temp = temp->next;
+        }
+        if(temp->next == NULL){
+            temp->next = &diskTable[index];
+            return;
+        }
+        else{
+            while(temp->next != NULL && temp->next->track <= lastTrack){
+                temp = temp->next;
+            }
+            diskTable[index].next = temp->next;
+            temp->next = &diskTable[index];
+            return;
+        }
+    }
 }
 //-------------Utility Functions------------------//
 

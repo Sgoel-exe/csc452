@@ -1,0 +1,7 @@
+phase5_start_service_processes() called -- currently a NOP
+start4(): Testing disk 0
+start4(): DiskWrite returned 0, status 0
+start4(): Read from disk: 'This is a test'
+start4(): Read from disk: ''
+start4(): Read from disk: ''
+start4(): Testing disk 1
