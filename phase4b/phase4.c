@@ -82,6 +82,8 @@ procStruct * peekHeap(procHeap * heap);
 #define DISK_MUT_TRACK 3 // 1 mutex per track
 #define DISK_NUM_TRACKS 4
 #define DISK_MBOX_SIZE 5 // 4 mailboxes for disk
+#define DISK0 0
+#define DISK1 1
 
 //-------------Global Variables------------------//
 procStruct procTable[MAXPROC];
@@ -93,9 +95,10 @@ int terminalLines[USLOSS_TERM_UNITS][MAXLINE];
 int terminalLineMbox[USLOSS_TERM_UNITS];
 int terminalReadMbox[USLOSS_TERM_UNITS];
 int terminalWrite[USLOSS_TERM_UNITS];
+int writeLock[USLOSS_TERM_UNITS];
 
 //Disk Stuff
-diskReqQ diskTable[MAXPROC];
+diskReqQ diskTable[2][MAXPROC];
 int disk0[DISK_MBOX_SIZE];
 int disk1[DISK_MBOX_SIZE];
 int CurrentDisk;
@@ -137,13 +140,17 @@ void phase4_init(){
         terminalLineMbox[i] = 0;
         terminalReadMbox[i] = MboxCreate(10,MAXLINE);
         terminalWrite[i] = MboxCreate(1,0);
+        writeLock[i] = MboxCreate(1,0);
     }
 
     //Disk Stuff
     for(int i = 0; i < MAXPROC; i++){
-        diskTable[i].pid = -1;
-        diskTable[i].next = NULL;
-        diskTable[i].mboxID = MboxCreate(1,0);   
+        diskTable[DISK0][i].pid = -1;
+        diskTable[DISK0][i].next = NULL;
+        diskTable[DISK0][i].mboxID = MboxCreate(1,0);   
+        diskTable[DISK1][i].pid = -1;
+        diskTable[DISK1][i].next = NULL;
+        diskTable[DISK1][i].mboxID = MboxCreate(1,0);
     }
 
     for(int i = 0; i < DISK_MBOX_SIZE - 1; i++){
@@ -269,6 +276,7 @@ int  kernTermWrite(char *buffer, int bufferSize, int unit,int *numCharsRead){
     if(unit < 0 || unit >= USLOSS_TERM_UNITS || bufferSize < 0){
         return -1;
     }
+    MboxSend(writeLock[unit], NULL, 0);
     for(int i = 0; i < bufferSize; i++){
         MboxRecv(terminalWrite[unit], NULL, 0);
         //Supplement code
@@ -280,6 +288,7 @@ int  kernTermWrite(char *buffer, int bufferSize, int unit,int *numCharsRead){
         int useless = USLOSS_DeviceOutput(USLOSS_TERM_DEV, unit, (void *)(long)cr_val);
         useless++; // Avoid warning
     }
+    MboxRecv(writeLock[unit], NULL, 0);
     return bufferSize;
 }
 
@@ -428,8 +437,12 @@ int kernDiskWrite(void *diskBuffer, int unit, int track, int first,int sectors, 
         return -1;
     }
     int numTracks = unit == 0 ? 16 : 32;
-    if(track < 0 || track >= numTracks){
+    if(track < 0){
         return -1;
+    }
+    if(track >= numTracks){
+        *status = USLOSS_DEV_ERROR;
+        return 0;
     }
     if(first < 0 || first >= USLOSS_DISK_TRACK_SIZE){
         return -1;
@@ -437,21 +450,22 @@ int kernDiskWrite(void *diskBuffer, int unit, int track, int first,int sectors, 
     int pid = getpid();
     int CurrentMbox = unit == 0 ? disk0[DISK_MBOX] : disk1[DISK_MBOX];
     int CurrentQMbox = unit == 0 ? disk0[DISK_Q_MBOX] : disk1[DISK_Q_MBOX];
-
+    int currentTable = unit;
     int index = pid % MAXPROC;
-    diskTable[index].pid = pid;
-    diskTable[index].track = track;
-    diskTable[index].first = first;
-    diskTable[index].sectors = sectors;
-    // strcpy(diskTable[index].diskBuffer, buffer);
-    diskTable[index].diskBuffer = diskBuffer;
-    diskTable[index].op = USLOSS_DISK_WRITE;
+    diskTable[currentTable][index].pid = pid;
+    diskTable[currentTable][index].track = track;
+    diskTable[currentTable][index].first = first;
+    diskTable[currentTable][index].sectors = sectors;
+    // memcpy(diskTable[index].diskBuffer, diskBuffer, sectors*USLOSS_DISK_SECTOR_SIZE+1);
+    // USLOSS_Console("kernDiskWrite:Unit %d buffer: %s\n", unit, diskBuffer);
+    diskTable[currentTable][index].diskBuffer = diskBuffer;
+    diskTable[currentTable][index].op = USLOSS_DISK_WRITE;
 
     MboxSend(CurrentQMbox, NULL, 0);
     diskQueue(unit, pid);
     MboxRecv(CurrentQMbox, NULL, 0);
     MboxCondSend(CurrentMbox, NULL, 0);
-    MboxRecv(diskTable[index].mboxID, NULL, 0);
+    MboxRecv(diskTable[currentTable][index].mboxID, NULL, 0);
     status = 0;
     return 0;
 }
@@ -500,21 +514,23 @@ int kernDiskRead (void *diskBuffer, int unit, int track, int first,int sectors, 
     int pid = getpid();
     int CurrentMbox = unit == 0 ? disk0[DISK_MBOX] : disk1[DISK_MBOX];
     int CurrentQMbox = unit == 0 ? disk0[DISK_Q_MBOX] : disk1[DISK_Q_MBOX];
-
+    int currentTable = unit;
     int index = pid % MAXPROC;
-    diskTable[index].pid = pid;
-    diskTable[index].track = track;
-    diskTable[index].first = first;
-    diskTable[index].sectors = sectors;
-    strcpy(diskBuffer, diskTable[index].diskBuffer);
-    diskTable[index].diskBuffer = diskBuffer;
-    diskTable[index].op = USLOSS_DISK_READ;
+    diskTable[currentTable][index].pid = pid;
+    diskTable[currentTable][index].track = track;
+    diskTable[currentTable][index].first = first;
+    diskTable[currentTable][index].sectors = sectors;
+    // memcpy(diskBuffer, diskTable[currentTable][index].diskBuffer, sectors*USLOSS_DISK_SECTOR_SIZE+1);
+    // USLOSS_Console("kernDiskRead:Unit %d buffer: %s\n", unit, diskBuffer);
+    diskTable[currentTable][index].diskBuffer = diskBuffer;
+    // USLOSS_Console("kernDiskRead: %s\n", &(diskBuffer[0]));
+    diskTable[currentTable][index].op = USLOSS_DISK_READ;
 
     MboxSend(CurrentQMbox, NULL, 0);
     diskQueue(unit, pid);
     MboxRecv(CurrentQMbox, NULL, 0);
     MboxCondSend(CurrentMbox, NULL, 0);
-    MboxRecv(diskTable[index].mboxID, NULL, 0);
+    MboxRecv(diskTable[currentTable][index].mboxID, NULL, 0);
     status = 0;
     return 0;
 }
@@ -553,7 +569,7 @@ static int clockDriver(char *arg){
  * and it is responsible for handling terminal interrupts and performing any necessary 
  * actions. It takes a single argument, which can be used to pass data to the driver.
  *
- * @param args A pointer to data that can be used by the driver.
+ * @param args A pointer telling us terminal unit.
  * @return int Returns 0 if the driver function completed successfully, -1 otherwise.
  */
 static int termDriver(char *args){
@@ -600,6 +616,16 @@ static int termDriver(char *args){
     return 0;
 }
 
+/**
+ * @brief The disk driver function.
+ *
+ * This function is a driver for the disk. It is typically run as a separate process, 
+ * and it is responsible for handling disk interrupts and performing any necessary 
+ * actions. It takes a single argument, which can be used to pass data to the driver.
+ *
+ * @param args A pointer telling us the disk unit.
+ * @return int Returns 0 if the driver function completed successfully, -1 otherwise.
+ */
 static int diskDriver(char *args){
     int currentMbox, currentQMbox, currentMut, currentMutTrack;
     int unit;
@@ -679,6 +705,16 @@ static int diskDriver(char *args){
 }
 
 //-------------Disk Helper Functions---------------//
+/**
+ * @brief Seeks to a specific track on a disk.
+ *
+ * This function is used to move the disk's read/write head to a specific track. 
+ * It takes the disk unit number and the track number as arguments.
+ *
+ * @param unit The disk unit number.
+ * @param track The track number to seek to.
+ * @return int Returns 0 if the seek operation was successful, -1 otherwise.
+ */
 int diskSeek(int unit, int track){
     int status;
     int CurrentMbox = unit == 0 ? disk0[DISK_MBOX] : disk1[DISK_MBOX];
@@ -694,11 +730,21 @@ int diskSeek(int unit, int track){
     return 0;
 }
 
+/**
+ * @brief Adds a process to the disk queue.
+ *
+ * This function is used to add a process to the queue of processes waiting for disk access. 
+ * It takes the disk unit number and the process ID as arguments.
+ *
+ * @param unit The disk unit number.
+ * @param pid The process ID of the process to be added to the queue.
+ * @return void
+ */
 void diskQueue(int unit, int pid){
     diskReqQ * temp = NULL;
     if(unit == 0){
         if(disk0Req == NULL){
-            disk0Req = &diskTable[pid % MAXPROC];
+            disk0Req = &diskTable[DISK0][pid % MAXPROC];
             return;
         }
         else{
@@ -707,7 +753,7 @@ void diskQueue(int unit, int pid){
     }
     else{
         if(disk1Req == NULL){
-            disk1Req = &diskTable[pid % MAXPROC];
+            disk1Req = &diskTable[DISK1][pid % MAXPROC];
             return;
         }
         else{
@@ -716,28 +762,28 @@ void diskQueue(int unit, int pid){
     }
     int index = pid % MAXPROC;
     int currentTrack = temp->track;
-    int lastTrack = diskTable[index].track;
+    int lastTrack = diskTable[unit][index].track;
     if(currentTrack <= lastTrack){
         while(temp->next != NULL && temp->next->track <= currentTrack && temp->next->track >= lastTrack){
             temp = temp->next;
         }
-        diskTable[index].next = temp->next;
-        temp->next = &diskTable[index];
+        diskTable[unit][index].next = temp->next;
+        temp->next = &diskTable[unit][index];
         return;
     }else{
         while(temp->next != NULL && temp->next->track >= currentTrack){
             temp = temp->next;
         }
         if(temp->next == NULL){
-            temp->next = &diskTable[index];
+            temp->next = &diskTable[unit][index];
             return;
         }
         else{
             while(temp->next != NULL && temp->next->track <= lastTrack){
                 temp = temp->next;
             }
-            diskTable[index].next = temp->next;
-            temp->next = &diskTable[index];
+            diskTable[unit][index].next = temp->next;
+            temp->next = &diskTable[unit][index];
             return;
         }
     }

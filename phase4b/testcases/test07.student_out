@@ -5,3 +5,22 @@ Child(0): started
 Child(1): started
 Child(2): started
 Child(3): started
+Child(0): done with write #0
+Child(0): done with write #1
+Child(1): done with write #0
+Child(0): done with write #2
+Child(1): done with write #1
+Child(2): done with write #0
+Child(0): done with write #3
+Child(0): terminating
+Child(1): done with write #2
+Child(2): done with write #1
+Child(3): done with write #0
+Child(1): done with write #3
+Child(1): terminating
+Child(2): done with write #2
+Child(3): done with write #1
+Child(2): done with write #3
+Child(2): terminating
+TESTCASE TIMED OUT!!!
+finish(): The simulation is now terminating.

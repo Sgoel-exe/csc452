@@ -126,6 +126,7 @@ int start4(char *arg)
     for (j = 0; j < 4; j++)
     {
         status = -1;
+        // USLOSS_Console("start4(): reading from disk 1, track %d, sector 1\n", j);
         if (DiskRead(XXbuf[j], 1, j, j, 1, &status) < 0)
             USLOSS_Console("start4(): ERROR: DiskGet\n");
 
